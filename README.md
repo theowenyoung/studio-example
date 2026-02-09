@@ -13,6 +13,7 @@
 - **本地构建，远程拉取**。Docker 镜像在本地或 CI 构建好推到 ECR，服务器只做 `docker pull` + `docker compose up`。服务器上不装 Node.js、不跑 build，保持干净。通过 [docker-rollout](https://github.com/wowu/docker-rollout) 实现零停机部署——先启动新容器通过健康检查，再切换流量、停掉旧容器，失败时自动回滚
 - **一个文件定义所有任务**。`mise.toml` 是唯一的任务入口，CI 工作流只调用 `mise run <task>`，不重复实现逻辑。本地开发和 CI 执行的是同一套命令
 - **服务器是可替换的**。服务器挂了不用慌。Ansible playbook 定义了完整的服务器状态，Docker 镜像在 ECR，密钥在 AWS Parameter Store，数据库定期备份到 S3。开一台新机器，跑 `mr server-init` → `mr deploy-infra` → `mr deploy-apps`，整个环境就回来了。不需要记住服务器上改过什么
+- **基础设施也在仓库里**。调优过的 PostgreSQL、双持久化的 Redis、每天自动备份到 S3 的备份服务（Postgres + Redis + SQLite 全覆盖），都是配好的，不用从零开始
 - **Monorepo 放一切**。应用代码、基础设施配置、部署脚本、CI 工作流全部放在一个仓库。改一个配置就能看到它如何影响从构建到部署的整条链路
 
 这套方案实际跑在生产环境中，管理着多个 Web 应用和第三方服务。
