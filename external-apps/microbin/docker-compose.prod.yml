@@ -1,0 +1,51 @@
+name: ${DOCKER_SERVICE_NAME}
+
+services:
+  ${DOCKER_SERVICE_NAME}:
+    image: ${IMAGE_TAG}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Non-default settings only
+      MICROBIN_HIGHLIGHTSYNTAX: "true"
+      MICROBIN_RENDER_MARKDOWN: "true"
+      MICROBIN_RENDER_HTML: "true"
+      MICROBIN_QR: "true"
+      MICROBIN_SHOW_READ_STATS: "true"
+      MICROBIN_HIDE_LOGO: "true"
+      MICROBIN_EDITABLE: "false"
+      MICROBIN_ETERNAL_PASTA: "true"
+      MICROBIN_READONLY: "true"
+      MICROBIN_DEFAULT_EXPIRY: "never"
+      MICROBIN_GC_DAYS: 30
+      MICROBIN_ENCRYPTION_CLIENT_SIDE: "true"
+      MICROBIN_ENCRYPTION_SERVER_SIDE: "true"
+      MICROBIN_MAX_FILE_SIZE_ENCRYPTED_MB: 1024
+      MICROBIN_DISABLE_TELEMETRY: "true"
+      MICROBIN_DEFAULT_PRIVACY: "public"
+    networks:
+      - shared
+    volumes:
+      - sqlite_microbin_data:/app/microbin_data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "timeout 1 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/3000'",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  sqlite_microbin_data:
+
+networks:
+  shared:
+    external: true

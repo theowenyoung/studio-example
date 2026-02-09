@@ -1,0 +1,110 @@
+name: Deploy Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Infrastructure service to deploy"
+        required: true
+        type: choice
+        options:
+          - "all"
+          - "postgres"
+          - "redis"
+          - "caddy"
+          - "backup"
+
+env:
+  ECR_REGISTRY: YOUR_AWS_ACCOUNT_ID.dkr.ecr.us-west-2.amazonaws.com
+
+jobs:
+  deploy-infra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 缓存 mise
+      - name: Cache mise
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/mise
+          key: mise-${{ runner.os }}-${{ hashFiles('.mise/config.toml') }}
+
+      # 安装 mise
+      - name: Install mise
+        run: |
+          curl https://mise.run | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      # 激活 mise 环境
+      - name: Setup mise
+        run: |
+          mise install
+
+      # 缓存 Ansible Galaxy 依赖
+      - name: Cache Ansible Galaxy dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ansible/roles
+            ~/.ansible/collections
+          key: ansible-galaxy-${{ hashFiles('ansible/requirements.yml') }}
+
+      # 安装 Ansible Galaxy 依赖
+      - name: Install Ansible Galaxy dependencies
+        run: |
+          ansible-galaxy install -r ansible/requirements.yml
+
+      # 配置 AWS（用于 ECR 和 Parameter Store）
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.CI_AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      # 从 Parameter Store 读取 SSH Key
+      - name: Load SSH key from Parameter Store
+        run: |
+          DEPLOY_SSH_KEY=$(aws ssm get-parameter --name "/studio-prod/DEPLOY_SSH_KEY" --with-decryption --query "Parameter.Value" --output text)
+
+          # 保存 SSH key 到文件
+          mkdir -p ~/.ssh
+          echo "${DEPLOY_SSH_KEY}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+          echo "✅ SSH key loaded"
+
+      # 登录 ECR
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region us-west-2 | \
+            docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+
+      # 同步服务器配置（server-mise.toml, bash_aliases）
+      - name: Sync server config
+        run: mise run sync-config
+        env:
+          ANSIBLE_SSH_PRIVATE_KEY_FILE: ~/.ssh/id_rsa
+
+      # 部署基础设施（使用 repo 中的 inventory.yml + 环境变量指定 SSH key）
+      - name: Deploy infrastructure
+        run: |
+          if [ "${{ inputs.service }}" = "all" ]; then
+            mise run deploy-infra
+          else
+            mise run deploy-${{ inputs.service }}
+          fi
+        env:
+          ANSIBLE_SSH_PRIVATE_KEY_FILE: ~/.ssh/id_rsa
+
+      # 部署结果
+      - name: Deployment summary
+        if: always()
+        run: |
+          echo "### Infrastructure Deployment Result 🏗️" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Service: \`${{ inputs.service }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Triggered by: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY

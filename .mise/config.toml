@@ -1,0 +1,10 @@
+# Tools configuration (separate file for CI cache optimization)
+# This file changes rarely, so CI can cache mise tools based on this file's hash
+
+[tools]
+python = "3.14"
+node = "lts"
+rust = "1.86"
+"cargo:psenv" = "0.6.0"
+"pipx:ansible-core" = "2"
+zola = "0.19"

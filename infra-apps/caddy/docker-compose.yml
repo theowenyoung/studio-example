@@ -1,0 +1,24 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    volumes:
+      - ./dev-config:/etc/caddy:ro
+      - ./.local/certs:/certs:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - shared
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  shared:
+    driver: bridge
+    external: true

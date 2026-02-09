@@ -1,0 +1,24 @@
+# ==================== Application Services ====================
+
+# API
+api-demo.owenyoung.com {
+    import app_cache
+    import resilient_proxy api:3000
+}
+
+# Hono Demo
+hono-demo.owenyoung.com {
+    import app_cache
+    import resilient_proxy hono-demo:3000
+}
+
+
+# Microbin (Pastebin)
+share.owenyoung.com {
+    tls {
+        dns cloudflare {env.COMMON_CLOUDFLARE_API_TOKEN}
+    }
+    import app_cache
+    import resilient_proxy microbin:3000
+}
+

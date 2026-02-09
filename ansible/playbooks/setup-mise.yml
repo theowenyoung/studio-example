@@ -1,0 +1,38 @@
+---
+# Setup mise on production server
+# This playbook installs mise and configures it to use /srv/mise.toml
+
+- name: Setup mise on Server
+  hosts: all
+  become: yes
+
+  tasks:
+    - name: Check if mise is already installed
+      stat:
+        path: /home/deploy/.local/bin/mise
+      become_user: deploy
+      register: mise_binary
+
+    - name: Install mise
+      shell: |
+        curl https://mise.run | sh
+      args:
+        creates: /home/deploy/.local/bin/mise
+      become_user: deploy
+      when: not mise_binary.stat.exists
+    - name: Install usage CLI for mise
+      shell: /home/deploy/.local/bin/mise use -g usage
+      become_user: deploy
+      tags: [mise]
+      failed_when: false
+
+
+    - name: Display mise installation info
+      debug:
+        msg:
+          - "✅ mise installed "
+          - ""
+          - "Usage on server:"
+          - "  mise tasks          # List all available tasks"
+          - "  mise run <task>     # Run a task"
+          - "  mr <task>           # Use alias (after aliases are installed)"

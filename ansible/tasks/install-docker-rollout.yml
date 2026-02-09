@@ -1,0 +1,55 @@
+---
+# 安装 docker-rollout 工具用于零停机部署
+# https://github.com/Wowu/docker-rollout
+
+- name: Check if docker-rollout is already installed
+  stat:
+    path: /usr/local/bin/docker-rollout
+  register: docker_rollout_binary
+
+- name: Download and install docker-rollout (latest version)
+  when: not docker_rollout_binary.stat.exists
+  block:
+    - name: Download docker-rollout binary (latest)
+      get_url:
+        url: "https://github.com/wowu/docker-rollout/releases/latest/download/docker-rollout"
+        dest: /tmp/docker-rollout
+        mode: '0755'
+
+    - name: Create Docker CLI plugins directory
+      file:
+        path: /usr/local/lib/docker/cli-plugins
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Install docker-rollout as Docker CLI plugin
+      copy:
+        src: /tmp/docker-rollout
+        dest: /usr/local/lib/docker/cli-plugins/docker-rollout
+        remote_src: yes
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Create symlink in /usr/local/bin for direct access
+      file:
+        src: /usr/local/lib/docker/cli-plugins/docker-rollout
+        dest: /usr/local/bin/docker-rollout
+        state: link
+
+    - name: Remove temporary file
+      file:
+        path: /tmp/docker-rollout
+        state: absent
+
+- name: Verify docker-rollout installation
+  stat:
+    path: /usr/local/bin/docker-rollout
+  register: verify_install
+
+- name: Show docker-rollout installation status
+  debug:
+    msg: "✅ docker-rollout installed successfully"
+  when: verify_install.stat.exists

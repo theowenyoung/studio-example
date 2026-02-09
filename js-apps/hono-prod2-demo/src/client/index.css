@@ -1,0 +1,30 @@
+/* Custom styles for Hono Demo */
+
+:root {
+  --primary-color: #0277bd;
+  --secondary-color: #d32f2f;
+  --bg-color: #f8f8f8;
+}
+
+body {
+  background-color: var(--bg-color);
+}
+
+header h1 a {
+  color: var(--primary-color);
+  text-decoration: none;
+}
+
+header h1 a:hover {
+  text-decoration: underline;
+}
+
+.post-card {
+  transition: box-shadow 0.3s ease;
+}
+
+.post-card:hover {
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Add more custom styles here */

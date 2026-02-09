@@ -1,0 +1,21 @@
+services:
+  redlib:
+    # Redlib v0.36.0 - keep in sync with docker-compose.prod.yml
+    image: git.nadeko.net/fijxu/redlib:2026-01-28
+    restart: unless-stopped
+    user: nobody
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      REDLIB_ROBOTS_DISABLE_INDEXING: "off"
+    ports:
+      - "9020:8080"
+    networks:
+      - shared
+
+networks:
+  shared:
+    external: true

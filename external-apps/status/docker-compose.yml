@@ -1,0 +1,26 @@
+services:
+  status:
+    image: louislam/uptime-kuma:2
+    restart: unless-stopped
+    ports:
+      - "9006:3000"
+    environment:
+      UPTIME_KUMA_PORT: 3000
+      UPTIME_KUMA_DB_TYPE: sqlite
+    volumes:
+      - sqlite_status_data:/app/data
+    networks:
+      - shared
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/api/status-page/heartbeat', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  sqlite_status_data:
+
+networks:
+  shared:
+    external: true

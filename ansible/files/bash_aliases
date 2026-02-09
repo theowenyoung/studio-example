@@ -1,0 +1,103 @@
+# Shell Aliases for Production Server
+# Synced via Ansible to ~/.bash_aliases
+
+# ==================== Common Shortcuts ====================
+alias ll='ls -lah'
+alias la='ls -A'
+alias l='ls -CF'
+alias ..='cd ..'
+alias ...='cd ../..'
+alias ....='cd ../../..'
+
+# Grep with color
+alias grep='grep --color=auto'
+alias fgrep='fgrep --color=auto'
+alias egrep='egrep --color=auto'
+
+# ==================== Docker Shortcuts ====================
+alias dc='docker compose'
+alias dps='docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"'
+alias dpsa='docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"'
+alias dlogs='docker compose logs -f'
+alias dstats='docker stats --no-stream'
+alias dprune='docker system prune -f'
+
+# ==================== Project Directories ====================
+alias srv='cd /srv'
+alias app='cd /srv/app'
+alias backup='cd /srv/backup'
+alias postgres='cd /srv/postgres'
+alias redis='cd /srv/redis'
+alias caddy='cd /srv/caddy'
+
+eval "$(/home/deploy/.local/bin/mise activate bash)"
+
+# ==================== mise Shortcuts ====================
+# Load mise completion and shortcuts (if mise is installed)
+if command -v mise &> /dev/null; then
+    # Enable bash completion for mise
+    source <(mise completion bash --include-bash-completion-lib)
+
+    # Create mr function (mise run) with completion support
+    function mr() {
+        mise run "$@"
+    }
+
+    # Bind mr to use mise's completion function
+    # The completion function is typically named _mise after loading
+    complete -F _mise mr
+
+    # Simple aliases for other commands
+    alias mt='mise tasks'
+    alias ml='mise tasks'  # list tasks
+fi
+
+# ==================== Git Shortcuts ====================
+alias gs='git status'
+alias gp='git pull'
+alias gl='git log --oneline -10'
+alias gb='git branch'
+
+# ==================== System Monitoring ====================
+alias ports='netstat -tulanp'
+alias meminfo='free -h'
+alias diskinfo='df -h'
+alias cpuinfo='lscpu'
+
+# ==================== Useful Functions ====================
+# Find process by port
+port() {
+    if [ -z "$1" ]; then
+        echo "Usage: port <port_number>"
+        return 1
+    fi
+    sudo lsof -i :$1
+}
+
+# Find large files
+findlarge() {
+    local size=${1:-100M}
+    local path=${2:-.}
+    find "$path" -type f -size +$size -exec ls -lh {} \; | awk '{ print $9 ": " $5 }'
+}
+
+# Docker logs with timestamp
+dlogs-ts() {
+    if [ -z "$1" ]; then
+        docker compose logs -f --timestamps
+    else
+        docker compose logs -f --timestamps "$1"
+    fi
+}
+
+# Quick backup of a file (renamed to avoid conflict with 'backup' alias)
+backupfile() {
+    if [ -z "$1" ]; then
+        echo "Usage: backupfile <file>"
+        return 1
+    fi
+    cp "$1" "$1.backup.$(date +%Y%m%d_%H%M%S)"
+    echo "Backed up $1"
+}
+# Shorter alias
+alias bak='backupfile'

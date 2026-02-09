@@ -1,0 +1,32 @@
+services:
+  umami:
+    image: docker.umami.is/umami-software/umami:3
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DISABLE_TELEMETRY: 1
+      TRACKER_SCRIPT_NAME: "utils.min.js"
+      COLLECT_API_ENDPOINT: "/api/check"
+    ports:
+      - "9004:3000"
+    networks:
+      - shared
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://127.0.0.1:3000/api/heartbeat",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  shared:
+    external: true

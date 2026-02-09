@@ -1,0 +1,32 @@
+---
+- name: Run Backup on Production Server
+  hosts: prod_servers  # 备份只在生产环境
+  gather_facts: no
+
+  vars:
+    backup_dir: "/srv/backup"
+
+  tasks:
+    - name: Check if backup service exists
+      stat:
+        path: "{{ backup_dir }}/docker-compose.yml"
+      register: backup_compose
+
+    - name: Fail if backup service not deployed
+      fail:
+        msg: "Backup service not found. Please deploy it first with 'mise run deploy-infra-backup'"
+      when: not backup_compose.stat.exists
+
+    - name: Run backup-all.sh
+      shell: |
+        cd {{ backup_dir }}
+        docker compose run --rm backup /usr/local/bin/backup-all.sh
+      register: backup_result
+
+    - name: Display backup output
+      debug:
+        msg: "{{ backup_result.stdout_lines }}"
+
+    - name: Show backup completion message
+      debug:
+        msg: "✅ Backup completed successfully!"

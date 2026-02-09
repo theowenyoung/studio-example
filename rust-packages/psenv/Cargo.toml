@@ -1,0 +1,33 @@
+[package]
+name = "psenv"
+version = "0.6.0"
+edition = "2021"
+authors = ["Owen Young <owen@owenyoung.com>"]
+description = "A CLI tool to fetch secrets from AWS Parameter Store and generate .env files"
+license = "MIT"
+repository = "https://github.com/theowenyoung/studio"
+homepage = "https://github.com/theowenyoung/studio/tree/main/rust-packages/psenv"
+documentation = "https://docs.rs/psenv"
+readme = "README.md"
+keywords = ["aws", "parameter-store", "env", "cli", "secrets"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "psenv"
+path = "src/main.rs"
+
+[dependencies]
+aws-config = "1.0"
+aws-sdk-ssm = "1.0"
+clap = { version = "4.0", features = ["derive"] }
+tokio = { version = "1.0", features = ["full"] }
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+env_logger = "0.10"
+log = "0.4"
+regex = "1.0"
+thiserror = "1.0"
+
+[dev-dependencies]
+tempfile = "3.0"

@@ -1,0 +1,42 @@
+services:
+  outline:
+    # Outline Wiki - Latest version queried from Docker Hub: 1.1.0
+    image: docker.getoutline.com/outlinewiki/outline:1.1.0
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Non-sensitive config (keep in docker-compose, not .env)
+      PORT: 3000
+      NODE_ENV: production
+      FORCE_HTTPS: "false"
+      PGSSLMODE: disable
+      # File storage - S3
+      FILE_STORAGE: s3
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      AWS_S3_ACL: private
+      # Rate limiting (disabled for debugging)
+      RATE_LIMITER_ENABLED: "false"
+      # Disable telemetry
+      ENABLE_UPDATES: "false"
+    ports:
+      - "9008:3000"
+    networks:
+      - shared
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://127.0.0.1:3000/_health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  shared:
+    external: true

@@ -1,0 +1,25 @@
+name: ${DOCKER_SERVICE_NAME}
+
+services:
+  # 应用服务
+  ${DOCKER_SERVICE_NAME}:
+    image: ${IMAGE_TAG}
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - shared
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  shared:
+    external: true

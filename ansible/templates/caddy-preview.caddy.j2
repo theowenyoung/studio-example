@@ -1,0 +1,16 @@
+# Preview: {{ branch_name }}-{{ service_base }}
+# Auto-generated on {{ ansible_date_time.iso8601 }}
+
+{{ domain }} {
+    tls {
+        protocols tls1.2 tls1.3
+    }
+
+{% if service_base in ['blog', 'storefront', 'owen-blog'] %}
+    import ssg_cache
+{% else %}
+    import app_cache
+{% endif %}
+    import observability
+    import resilient_proxy {{ container_name }}:3000
+}

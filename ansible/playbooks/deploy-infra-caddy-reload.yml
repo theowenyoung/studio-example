@@ -1,0 +1,47 @@
+---
+- name: Reload Caddy Configuration (Fast)
+  hosts: "{{ target_host | default('prod_servers') }}"  # 默认生产，但支持覆盖
+  gather_facts: no
+
+  vars:
+    service_name: "caddy"
+    local_config: "{{ playbook_dir }}/../../infra-apps/caddy/deploy-dist/config"
+    remote_dir: "/srv/caddy"
+
+  tasks:
+    - debug:
+        msg: "🔄 Reloading Caddy configuration..."
+
+    # ===== Sync only config directory (from deploy-dist, built for specific server) =====
+    - name: Sync config directory to server
+      synchronize:
+        src: "{{ local_config }}/"
+        dest: "{{ remote_dir }}/config/"
+        delete: no
+        owner: no
+        group: no
+        rsync_opts:
+          - "--exclude=preview/*"  # 保留服务器上的 preview 配置
+
+    # ===== Reload Caddy =====
+    - name: Reload Caddy configuration
+      shell: |
+        cd {{ remote_dir }}
+        docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile
+      register: reload_result
+      failed_when: false
+
+    - name: Display reload output
+      debug:
+        msg: "{{ reload_result.stdout_lines }}"
+      when: reload_result.stdout_lines is defined
+
+    - name: Check reload status
+      fail:
+        msg: "❌ Caddy reload failed! Error: {{ reload_result.stderr }}"
+      when: reload_result.rc != 0
+
+    - name: Display success message
+      debug:
+        msg: "✅ Caddy configuration reloaded successfully"
+      when: reload_result.rc == 0

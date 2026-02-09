@@ -1,0 +1,17 @@
+# ==================== Resilient Proxy ====================
+# 单服务器部署的弹性配置
+(resilient_proxy) {
+    # 基础反向代理配置
+    reverse_proxy {args[0]} {
+        # 转发客户端真实 IP 和协议信息
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Host {host}
+        # 转发 Cloudflare 头信息
+        header_up CF-Connecting-IP {header.CF-Connecting-IP}
+        header_up CF-IPCountry {header.CF-IPCountry}
+        header_up CF-RegionCode {header.CF-RegionCode}
+        header_up CF-IPCity {header.CF-IPCity}
+    }
+}

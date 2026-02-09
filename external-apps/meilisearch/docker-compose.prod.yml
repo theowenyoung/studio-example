@@ -1,0 +1,44 @@
+name: ${DOCKER_SERVICE_NAME}
+
+services:
+  ${DOCKER_SERVICE_NAME}:
+    image: getmeili/meilisearch:v1.29
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MEILI_ENV: production
+      MEILI_HTTP_ADDR: 0.0.0.0:3000
+      MEILI_NO_ANALYTICS: true
+      MEILI_NO_USAGE_STATS: true
+      MEILI_NO_CRASH_REPORTS: true
+    volumes:
+      - ${DOCKER_SERVICE_NAME}_data:/meili_data
+    networks:
+      - shared
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://127.0.0.1:3000/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  ${DOCKER_SERVICE_NAME}_data:
+    # Docker 管理的 volume，数据存储在 /data/docker/volumes/ (因为 data-root=/data/docker)
+
+networks:
+  shared:
+    external: true

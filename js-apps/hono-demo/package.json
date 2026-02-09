@@ -1,0 +1,31 @@
+{
+  "name": "hono-demo",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite --host --port 8001",
+    "build:client": "vite build --mode client",
+    "build:server": "vite build --mode production",
+    "build": "pnpm build:client && pnpm build:server",
+    "start": "NODE_ENV=production PORT=8001 node --env-file=.env dist/server/index.js",
+    "migrate": "node-pg-migrate up",
+    "migrate:down": "node-pg-migrate down",
+    "migrate:create": "node-pg-migrate create"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.5",
+    "@types/pg": "^8.15.6",
+    "dotenv": "^17.2.3",
+    "hono": "^4.10.3",
+    "node-pg-migrate": "^8.0.3",
+    "pg": "^8.16.3",
+    "redis": "^5.9.0"
+  },
+  "devDependencies": {
+    "@hono/vite-dev-server": "^0.23.0",
+    "@types/node": "^20.11.17",
+    "tsx": "^4.7.1",
+    "typescript": "^5.8.3",
+    "vite": "^5.4.14"
+  }
+}

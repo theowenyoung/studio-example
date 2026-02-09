@@ -1,0 +1,38 @@
+name: ${DOCKER_SERVICE_NAME}
+
+services:
+  # 数据库迁移服务（一次性任务）
+  ${DOCKER_SERVICE_NAME}-migrate:
+    image: ${IMAGE_TAG}
+    env_file: .env
+    networks:
+      - shared
+    command: ["pnpm", "migrate"]
+    restart: "no"
+    profiles:
+      - migrate
+
+  # 应用服务
+  ${DOCKER_SERVICE_NAME}:
+    image: ${IMAGE_TAG}
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - shared
+    # 注意：postgres 和 redis 是独立部署的基础设施服务，通过共享网络连接
+    # 不使用 depends_on，因为它们在不同的 compose 文件中
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  shared:
+    external: true

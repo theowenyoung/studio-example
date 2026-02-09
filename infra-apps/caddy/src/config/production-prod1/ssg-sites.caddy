@@ -1,0 +1,29 @@
+# ==================== SSG Sites (nginx containers) ====================
+
+
+owen-blog-demo.owenyoung.com {
+    import ssg_cache
+    import observability
+    import resilient_proxy owen-blog:3000
+}
+www.owenyoung.com {
+    # Use Cloudflare DNS-01 verification for domains behind Cloudflare proxy
+    tls {
+        dns cloudflare {env.COMMON_CLOUDFLARE_API_TOKEN}
+    }
+
+    import ssg_cache
+    import observability
+    import resilient_proxy owen-blog:3000
+}
+
+# Storefront
+storefront-demo.owenyoung.com {
+    tls {
+        protocols tls1.2 tls1.3
+    }
+    import ssg_cache
+    import observability
+    import resilient_proxy storefront:3000
+}
+

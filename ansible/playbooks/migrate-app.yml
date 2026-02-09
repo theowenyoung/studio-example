@@ -1,0 +1,64 @@
+---
+- name: Run Application Database Migration
+  hosts: prod_servers  # 迁移默认在生产环境
+
+  vars:
+    service_name: "{{ service_name }}"
+    remote_base: "/srv/{{ service_name }}"
+
+  tasks:
+    - name: Check if service is deployed
+      stat:
+        path: "{{ remote_base }}/current"
+      register: current_dir
+
+    - name: Fail if service not deployed
+      fail:
+        msg: "Service {{ service_name }} is not deployed yet. Please deploy first."
+      when: not current_dir.stat.exists
+
+    - debug:
+        msg: "🔄 Running database migrations for {{ service_name }}"
+
+    - name: Login to ECR
+      shell: |
+        aws ecr get-login-password --region {{ ecr_region }} | \
+          docker login --username AWS --password-stdin {{ ecr_registry }}
+      environment:
+        AWS_DEFAULT_REGION: "{{ ecr_region }}"
+
+    - name: Pull latest image
+      shell: |
+        cd {{ remote_base }}/current
+        docker compose pull
+
+    - name: Check if migrations service exists
+      shell: |
+        cd {{ remote_base }}/current
+        docker compose --profile migrate config --services 2>/dev/null | grep -q "{{ service_name }}-migrate"
+      register: has_migrations
+      failed_when: false
+
+    - name: Fail if no migrations service
+      fail:
+        msg: "Service {{ service_name }} does not have a migrations service configured"
+      when: has_migrations.rc != 0
+
+    - name: Run migrations
+      shell: |
+        cd {{ remote_base }}/current
+        docker compose --profile migrate run --rm {{ service_name }}-migrate
+      register: result
+
+    - name: Display migration output
+      debug:
+        var: result.stdout_lines
+
+    - name: Check migration status
+      fail:
+        msg: "❌ Migration failed! Exit code: {{ result.rc }}"
+      when: result.rc != 0
+
+    - name: Success message
+      debug:
+        msg: "✅ Database migrations for {{ service_name }} completed successfully"

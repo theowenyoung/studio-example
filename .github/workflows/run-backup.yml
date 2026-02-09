@@ -1,0 +1,100 @@
+name: Run Server Backup
+
+on:
+  workflow_dispatch:
+    inputs:
+      server:
+        description: "Target server"
+        required: true
+        type: choice
+        default: "all"
+        options:
+          - "all"    # 所有 prod 服务器（prod1 + prod2）
+          - "prod1"
+          - "prod2"
+
+env:
+  ECR_REGISTRY: YOUR_AWS_ACCOUNT_ID.dkr.ecr.us-west-2.amazonaws.com
+
+jobs:
+  run-backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache mise
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/mise
+          key: mise-${{ runner.os }}-${{ hashFiles('.mise/config.toml') }}
+
+      - name: Install mise
+        run: |
+          curl https://mise.run | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Setup mise
+        run: |
+          mise install
+
+      - name: Cache Ansible Galaxy dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ansible/roles
+            ~/.ansible/collections
+          key: ansible-galaxy-${{ hashFiles('ansible/requirements.yml') }}
+
+      - name: Install Ansible Galaxy dependencies
+        run: |
+          ansible-galaxy install -r ansible/requirements.yml
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.CI_AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Load SSH key from Parameter Store
+        run: |
+          # Backup always uses prod SSH key
+          DEPLOY_SSH_KEY=$(aws ssm get-parameter --name "/studio-prod/DEPLOY_SSH_KEY" --with-decryption --query "Parameter.Value" --output text)
+
+          mkdir -p ~/.ssh
+          echo "${DEPLOY_SSH_KEY}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+          echo "✅ SSH key loaded"
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region us-west-2 | \
+            docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+
+      - name: Run Server Backup
+        run: |
+          SERVER="${{ inputs.server }}"
+          if [ "$SERVER" = "all" ]; then
+            echo "🚀 Running backup on all active prod servers..."
+            # Get active prod servers from inventory (not commented out)
+            SERVERS=$(grep -A 100 "prod_servers:" ansible/inventory.yml | grep -E "^\s+prod[0-9]+:" | sed 's/://g' | awk '{print $1}')
+            for srv in $SERVERS; do
+              echo "📦 Running backup on $srv..."
+              mise run server-backup "$srv"
+            done
+          else
+            mise run server-backup "$SERVER"
+          fi
+        env:
+          ANSIBLE_SSH_PRIVATE_KEY_FILE: ~/.ssh/id_rsa
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Server Backup Result" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Server: \`${{ inputs.server }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Triggered by: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY

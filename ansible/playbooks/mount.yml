@@ -1,0 +1,485 @@
+---
+# 安全、幂等的数据盘挂载 Playbook
+# 遵循最佳实践：多重验证、数据保护、真正的幂等性
+#
+# 设计原则：
+# 1. 如果 /data 已正确挂载 → 完全跳过（SUCCESS）
+# 2. 如果 /data 在 fstab 但未挂载 → 只执行 mount（不修改配置）
+# 3. 如果 /data 完全未配置 → 执行完整挂载流程
+# 4. 永不破坏已有的正确配置和数据
+#
+# 变量:
+#   use_data_volume: true  → 挂载独立数据盘到 /data
+#   use_data_volume: false → 仅创建 /data 目录（使用系统盘）
+
+# ========================================
+# 无挂载模式：仅创建 /data 目录
+# ========================================
+- name: Create /data directory (no volume mount)
+  hosts: all
+  become: yes
+  gather_facts: no
+
+  tasks:
+    - name: Create /data directory on system disk
+      file:
+        path: /data
+        state: directory
+        owner: "{{ deploy_user | default('deploy') }}"
+        group: "{{ deploy_user | default('deploy') }}"
+        mode: '0755'
+      when: not (use_data_volume | default(true))
+
+    - name: Display no-mount mode message
+      debug:
+        msg:
+          - "✅ /data directory created on system disk"
+          - "   (use_data_volume=false, no volume mounted)"
+      when: not (use_data_volume | default(true))
+
+    - name: End play for this host (no mount mode)
+      meta: end_host
+      when: not (use_data_volume | default(true))
+
+# ========================================
+# 挂载模式：挂载独立数据盘
+# ========================================
+- name: Setup Data Storage Mount (Safe & Idempotent)
+  hosts: all
+  become: yes
+  any_errors_fatal: true  # 任何主机失败都停止整个 playbook
+  vars:
+    data_mount_point: "/data"
+    data_disk_min_size_gb: 10  # 最小磁盘大小（避免选择太小的设备）
+
+  tasks:
+    # ========================================
+    # 跳过条件：如果 use_data_volume=false，不执行挂载
+    # ========================================
+    - name: "Skip mount play if use_data_volume is false"
+      meta: end_host
+      when: not (use_data_volume | default(true))
+
+    # ========================================
+    # 阶段 1: 多重验证 - 检查 /data 是否已正确挂载
+    # ========================================
+    - name: "Phase 1: Check if /data is already mounted (mountpoint)"
+      command: mountpoint -q "{{ data_mount_point }}"
+      register: is_mountpoint
+      failed_when: false
+      changed_when: false
+
+    - name: "Phase 1: Verify /data is accessible (df)"
+      command: df "{{ data_mount_point }}"
+      register: df_check
+      failed_when: false
+      changed_when: false
+      when: is_mountpoint.rc == 0
+
+    - name: "Phase 1: Check /proc/mounts"
+      shell: grep -q " {{ data_mount_point }} " /proc/mounts
+      register: in_proc_mounts
+      failed_when: false
+      changed_when: false
+
+    - name: "Phase 1: Check /etc/fstab"
+      shell: grep -v "^#" /etc/fstab | grep -q " {{ data_mount_point }} "
+      register: in_fstab
+      failed_when: false
+      changed_when: false
+
+    - name: "Phase 1: Get current mount info"
+      shell: mount | grep " {{ data_mount_point }} " || echo "not mounted"
+      register: current_mount_info
+      changed_when: false
+
+    - name: "Phase 1: Display mount status"
+      debug:
+        msg:
+          - "====== /data Mount Status ======"
+          - "Is mountpoint: {{ is_mountpoint.rc == 0 }}"
+          - "Accessible (df): {{ df_check.rc == 0 if is_mountpoint.rc == 0 else 'N/A' }}"
+          - "In /proc/mounts: {{ in_proc_mounts.rc == 0 }}"
+          - "In /etc/fstab: {{ in_fstab.rc == 0 }}"
+          - "Current mount: {{ current_mount_info.stdout }}"
+          - "================================"
+
+    # ========================================
+    # 决策点 1: 如果已正确挂载且健康 → 完全跳过
+    # ========================================
+    - name: "Decision 1: Skip if /data is already healthy"
+      when: is_mountpoint.rc == 0 and df_check.rc == 0
+      block:
+        - name: Display success message
+          debug:
+            msg:
+              - "✅ /data is already mounted and healthy!"
+              - "{{ df_check.stdout_lines | join('\n') }}"
+              - ""
+              - "Skipping all mount operations (idempotent behavior)."
+
+        - name: End play for this host
+          meta: end_host
+
+    # ========================================
+    # 决策点 2: 如果在 fstab 但未挂载 → 只执行 mount
+    # ========================================
+    - name: "Decision 2: Mount from fstab if configured but not mounted"
+      when:
+        - is_mountpoint.rc != 0  # 未挂载
+        - in_fstab.rc == 0        # 但在 fstab 中
+      block:
+        - name: Get fstab entry for /data
+          shell: grep -v "^#" /etc/fstab | grep " {{ data_mount_point }} "
+          register: fstab_entry
+          changed_when: false
+
+        - name: Display fstab entry
+          debug:
+            msg:
+              - "⚠️  /data is configured in fstab but not mounted"
+              - "fstab entry: {{ fstab_entry.stdout }}"
+              - "Attempting to mount..."
+
+        - name: Create mount point directory if missing
+          file:
+            path: "{{ data_mount_point }}"
+            state: directory
+            mode: '0755'
+
+        - name: Mount using fstab configuration
+          command: mount "{{ data_mount_point }}"
+          register: mount_from_fstab
+
+        - name: Verify mount succeeded
+          command: df -h "{{ data_mount_point }}"
+          register: df_verify
+          changed_when: false
+
+        - name: Display success
+          debug:
+            msg:
+              - "✅ Successfully mounted /data using existing fstab configuration"
+              - "{{ df_verify.stdout }}"
+
+        - name: Set ownership
+          file:
+            path: "{{ data_mount_point }}"
+            owner: "{{ deploy_user | default('deploy') }}"
+            group: "{{ deploy_user | default('deploy') }}"
+            mode: '0755'
+
+        - name: End play for this host
+          meta: end_host
+
+    # ========================================
+    # 决策点 3: 完全未配置 → 执行完整挂载流程
+    # ========================================
+    - name: "Decision 3: Full mount setup (not configured)"
+      when:
+        - is_mountpoint.rc != 0  # 未挂载
+        - in_fstab.rc != 0        # 且不在 fstab 中
+      block:
+        # ========================================
+        # 3.1 数据安全检查
+        # ========================================
+        - name: Check if /data directory exists and has content
+          find:
+            paths: "{{ data_mount_point }}"
+            file_type: any
+          register: data_dir_contents
+          when: false  # 暂时禁用，因为可能 /data 不存在
+
+        - name: Check if /data exists
+          stat:
+            path: "{{ data_mount_point }}"
+          register: data_dir_stat
+
+        - name: Count files in /data if it exists
+          shell: find "{{ data_mount_point }}" -mindepth 1 -maxdepth 1 | wc -l
+          register: data_file_count
+          changed_when: false
+          when: data_dir_stat.stat.exists and data_dir_stat.stat.isdir
+
+        - name: Warn if /data has content
+          fail:
+            msg: |
+              ⚠️  WARNING: /data directory exists and contains {{ data_file_count.stdout }} items!
+
+              This playbook will mount a disk to /data, which may hide existing files.
+
+              To proceed:
+              1. Backup /data contents: sudo tar czf /tmp/data-backup.tar.gz /data
+              2. Re-run with: -e force_mount_over_data=true
+
+              Or manually move the files and re-run this playbook.
+          when:
+            - data_dir_stat.stat.exists
+            - data_dir_stat.stat.isdir
+            - data_file_count.stdout | int > 0
+            - not (force_mount_over_data | default(false))
+
+        # ========================================
+        # 3.2 磁盘检测
+        # ========================================
+        - name: Get all block devices
+          command: lsblk -J -b -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE
+          register: lsblk_output
+          changed_when: false
+
+        - name: Parse devices
+          set_fact:
+            all_devices: "{{ (lsblk_output.stdout | from_json).blockdevices }}"
+
+        - name: Find data disk candidates (disks)
+          set_fact:
+            disk_candidates: >-
+              {{
+                all_devices |
+                selectattr('type', 'equalto', 'disk') |
+                rejectattr('name', 'match', '^(sr|loop).*') |
+                rejectattr('size', 'equalto', 0) |
+                list
+              }}
+
+        - name: Find partition candidates from data disks
+          set_fact:
+            partition_candidates: >-
+              {{
+                disk_candidates |
+                selectattr('children', 'defined') |
+                map(attribute='children') |
+                flatten |
+                selectattr('type', 'equalto', 'part') |
+                rejectattr('mountpoint', 'equalto', '/') |
+                rejectattr('mountpoint', 'match', '^/boot') |
+                rejectattr('fstype', 'none') |
+                list
+              }}
+
+        - name: Debug - Show disk candidates
+          debug:
+            msg: "Disk {{ item.name }}: {{ (item.size | int / 1073741824) | round(1) }}GB, mountpoint={{ item.mountpoint | default('none') }}, fstype={{ item.fstype | default('none') }}"
+          loop: "{{ disk_candidates }}"
+          when: disk_candidates | length > 0
+
+        - name: Debug - Show partition candidates
+          debug:
+            msg: "Partition {{ item.name }}: {{ (item.size | int / 1073741824) | round(1) }}GB, mountpoint={{ item.mountpoint | default('none') }}, fstype={{ item.fstype | default('none') }}"
+          loop: "{{ partition_candidates }}"
+          when: partition_candidates | length > 0
+
+        # ========================================
+        # 3.3 智能选择设备（优先分区，其次整盘）
+        # ========================================
+
+        # 如果用户明确指定了设备，使用用户指定的
+        - name: Use user-specified device if provided
+          set_fact:
+            selected_device: "{{ data_disk | regex_replace('^/dev/', '') }}"
+            selection_method: "user-specified"
+            user_specified: true
+          when: data_disk is defined and data_disk != ''
+
+        # 否则，优先选择未挂载的分区
+        - name: Select largest unmounted partition (preferred)
+          set_fact:
+            selected_device: >-
+              {{
+                partition_candidates |
+                selectattr('mountpoint', 'none') |
+                sort(attribute='size', reverse=true) |
+                first |
+                default(none)
+              }}
+            selection_method: "auto-partition"
+          when:
+            - selected_device is not defined
+            - partition_candidates | length > 0
+
+        # 如果没有合适的分区，选择未挂载的整盘
+        - name: Select largest unmounted disk (fallback)
+          set_fact:
+            selected_device: >-
+              {{
+                disk_candidates |
+                selectattr('mountpoint', 'none') |
+                rejectattr('children', 'defined') |
+                sort(attribute='size', reverse=true) |
+                first |
+                default(none)
+              }}
+            selection_method: "auto-disk"
+          when:
+            - selected_device is not defined or selected_device == none
+            - disk_candidates | length > 0
+
+        # 如果还是没有，选择挂载到非标准位置的磁盘（可以重新挂载）
+        - name: Select disk mounted to non-standard location (last resort)
+          set_fact:
+            selected_device: >-
+              {{
+                disk_candidates |
+                rejectattr('mountpoint', 'none') |
+                rejectattr('mountpoint', 'equalto', '/') |
+                rejectattr('mountpoint', 'match', '^/boot') |
+                rejectattr('children', 'defined') |
+                sort(attribute='size', reverse=true) |
+                first |
+                default(none)
+              }}
+            selection_method: "auto-remount"
+            needs_remount: true
+          when:
+            - selected_device is not defined or selected_device == none
+            - disk_candidates | length > 0
+
+        - name: Fail if no suitable device found
+          fail:
+            msg: |
+              ❌ No suitable disk or partition found for /data
+
+              Available disks:
+              {{ disk_candidates | map(attribute='name') | list }}
+
+              Available partitions:
+              {{ partition_candidates | map(attribute='name') | list }}
+
+              Please specify manually: -e "data_disk=/dev/sdX"
+          when: selected_device is not defined or selected_device == none or selected_device == ''
+
+        - name: Set device variables (for auto-selected device)
+          set_fact:
+            final_device: "/dev/{{ selected_device.name }}"
+            device_size_gb: "{{ ((selected_device.size | int) / 1073741824) | round(1) }}"
+            device_has_fs: "{{ (selected_device.fstype | default('')) != '' }}"
+            device_fstype: "{{ selected_device.fstype | default('none') }}"
+            old_mountpoint: "{{ selected_device.mountpoint | default('none') }}"
+          when: user_specified is not defined or not user_specified
+
+        - name: Set device variables (for user-specified device)
+          set_fact:
+            final_device: "/dev/{{ selected_device }}"
+            device_size_gb: "unknown"
+            device_has_fs: false
+            device_fstype: "unknown"
+          when: user_specified is defined and user_specified
+
+        - name: Display selected device
+          debug:
+            msg:
+              - "====== Selected Device ======"
+              - "Device: {{ final_device }}"
+              - "Size: {{ device_size_gb }}GB"
+              - "Selection method: {{ selection_method }}"
+              - "Has filesystem: {{ device_has_fs }} ({{ device_fstype }})"
+              - "Old mountpoint: {{ old_mountpoint | default('none') }}"
+              - "Needs remount: {{ needs_remount | default(false) }}"
+              - "============================="
+
+        # ========================================
+        # 3.4 验证设备存在
+        # ========================================
+        - name: Verify device exists
+          stat:
+            path: "{{ final_device }}"
+          register: device_stat
+
+        - name: Fail if device doesn't exist
+          fail:
+            msg: "❌ Device {{ final_device }} does not exist!"
+          when: not device_stat.stat.exists
+
+        # ========================================
+        # 3.5 Unmount if already mounted elsewhere
+        # ========================================
+        - name: Check if device is currently mounted
+          shell: mount | grep "^{{ final_device }} " || true
+          register: current_mount
+          changed_when: false
+
+        - name: Unmount device from old location if needed
+          mount:
+            path: "{{ current_mount.stdout.split()[2] }}"
+            state: unmounted
+          when:
+            - current_mount.stdout != ''
+            - needs_remount is defined and needs_remount
+          register: unmount_result
+
+        - name: Show unmount message
+          debug:
+            msg: "🔄 Unmounted {{ final_device }} from {{ current_mount.stdout.split()[2] }}"
+          when:
+            - unmount_result is changed
+
+        # ========================================
+        # 3.6 格式化（仅在没有文件系统时）
+        # ========================================
+        - name: Check device filesystem type
+          command: blkid -o value -s TYPE "{{ final_device }}"
+          register: blkid_check
+          failed_when: false
+          changed_when: false
+
+        - name: Format device if no filesystem
+          filesystem:
+            fstype: ext4
+            dev: "{{ final_device }}"
+            force: no
+          when: blkid_check.rc != 0 or blkid_check.stdout == ''
+          register: format_result
+
+        - name: Show format result
+          debug:
+            msg: "✅ Formatted {{ final_device }} as ext4"
+          when: format_result is changed
+
+        - name: Show skip format message
+          debug:
+            msg: "⏭️  Skipped formatting {{ final_device }} (already has {{ blkid_check.stdout }} filesystem)"
+          when: format_result is skipped
+
+        # ========================================
+        # 3.7 创建挂载点
+        # ========================================
+        - name: Create mount point directory
+          file:
+            path: "{{ data_mount_point }}"
+            state: directory
+            owner: "{{ deploy_user | default('deploy') }}"
+            group: "{{ deploy_user | default('deploy') }}"
+            mode: '0755'
+
+        # ========================================
+        # 3.8 挂载并添加到 fstab（原子操作）
+        # ========================================
+        - name: Add to fstab and mount
+          mount:
+            path: "{{ data_mount_point }}"
+            src: "{{ final_device }}"
+            fstype: ext4
+            opts: defaults,noatime
+            state: mounted
+          register: mount_result
+
+        - name: Set ownership after mount
+          file:
+            path: "{{ data_mount_point }}"
+            owner: "{{ deploy_user | default('deploy') }}"
+            group: "{{ deploy_user | default('deploy') }}"
+            mode: '0755'
+            state: directory
+
+        - name: Verify mount
+          command: df -h "{{ data_mount_point }}"
+          register: df_final
+          changed_when: false
+
+        - name: Display success
+          debug:
+            msg:
+              - "✅ Successfully mounted {{ final_device }} to {{ data_mount_point }}"
+              - "{{ df_final.stdout }}"
+              - ""
+              - "This configuration is now persistent (added to /etc/fstab)"

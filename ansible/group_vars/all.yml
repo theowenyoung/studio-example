@@ -1,0 +1,103 @@
+---
+# 全局变量配置
+# 这些变量将应用于所有主机
+
+# ==================== 用户配置 ====================
+deploy_user: deploy
+
+# ==================== 环境配置 ====================
+deploy_environment: prod  # prod, preview, staging, development
+
+# ==================== 常用工具包 ====================
+# 在系统初始化时安装的常用工具
+common_packages:
+  # 基础工具
+  - curl
+  - wget
+  - vim
+  - git
+  - htop
+  - tree
+  - jq
+  - unzip
+  - zip
+
+  # 网络工具
+  - net-tools
+  - dnsutils
+  - iputils-ping
+  - traceroute
+
+  # 系统监控
+  - sysstat
+  - iotop
+
+  # 构建工具（如果需要编译）
+  - build-essential
+  - pkg-config
+
+  # AWS 工具
+  - awscli
+
+# ==================== 防火墙配置 ====================
+# geerlingguy.firewall 角色使用的变量
+firewall_allowed_tcp_ports:
+  - "22"    # SSH
+  - "80"    # HTTP
+  - "443"   # HTTPS
+
+firewall_allowed_udp_ports:
+  - "443"   # HTTP/3 (QUIC)
+
+# ==================== 安全配置 ====================
+# geerlingguy.security 角色使用的变量
+security_ssh_permit_root_login: "no"
+security_ssh_password_authentication: "no"
+security_sudoers_passwordless: []
+security_fail2ban_enabled: true
+
+# ==================== Docker 配置 ====================
+# geerlingguy.docker 角色使用的变量
+docker_users:
+  - "{{ deploy_user }}"
+
+docker_daemon_options:
+  data-root: "/data/docker"
+  log-driver: "json-file"
+  log-opts:
+    max-size: "10m"
+    max-file: "3"
+  storage-driver: "overlay2"
+
+# ==================== SSH 配置 ====================
+# willshersystems.sshd 角色使用的变量
+sshd:
+  PermitRootLogin: "no"
+  PasswordAuthentication: "no"
+  PubkeyAuthentication: "yes"
+  ChallengeResponseAuthentication: "no"
+  UsePAM: "yes"
+  X11Forwarding: "no"
+  PrintMotd: "no"
+  AcceptEnv: "LANG LC_*"
+  Subsystem: "sftp /usr/lib/openssh/sftp-server"
+  ClientAliveInterval: 300
+  ClientAliveCountMax: 2
+
+# ==================== 存储配置 ====================
+# 是否挂载独立数据盘到 /data
+# true  → 挂载独立数据盘（需要有额外的磁盘/卷）
+# false → 仅创建 /data 目录（使用系统盘）
+use_data_volume: false
+
+# ==================== 应用配置 ====================
+# 数据目录
+data_root: /data
+
+# 应用根目录
+app_root: /srv
+
+# ==================== ECR 配置 ====================
+# AWS ECR 镜像仓库配置
+ecr_registry: "YOUR_AWS_ACCOUNT_ID.dkr.ecr.us-west-2.amazonaws.com"
+ecr_region: "us-west-2"

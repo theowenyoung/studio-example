@@ -1,0 +1,8 @@
+# Fallback for deleted preview environments
+# This wildcard catches any *.preview.owenyoung.com not matched by specific configs
+*.preview.owenyoung.com {
+    tls {
+        dns cloudflare {env.COMMON_CLOUDFLARE_API_TOKEN}
+    }
+    respond "Preview environment not found." 404
+}

@@ -1,0 +1,13 @@
+{
+  "name": "studio",
+  "private": true,
+  "scripts": {
+  },
+  "devDependencies": {
+    "prettier": "^3.6.0"
+  },
+  "packageManager": "pnpm@8.15.6",
+  "engines": {
+    "node": ">=22"
+  }
+}

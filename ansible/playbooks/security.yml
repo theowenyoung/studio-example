@@ -1,0 +1,29 @@
+
+---
+- name: Security Hardening
+  hosts: all
+  become: yes
+  gather_facts: no  # 使用缓存的 facts
+
+  pre_tasks:
+    # 安装 fail2ban 依赖包
+    - name: Install fail2ban dependencies
+      package:
+        name:
+          - python3-systemd
+          - iptables
+          - ipset
+        state: present
+      when: security_fail2ban_enabled | default(true)
+      tags: [security, fail2ban, packages]
+  
+  roles:
+    - role: willshersystems.sshd
+      tags: [ssh]
+    
+    - role: geerlingguy.security
+      tags: [security]
+    
+    - role: geerlingguy.firewall
+      tags: [firewall]
+  

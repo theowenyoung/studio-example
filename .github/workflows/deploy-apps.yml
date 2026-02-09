@@ -1,0 +1,496 @@
+name: Deploy Applications
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "js-apps/**"
+      - "js-packages/**"
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "js-apps/**"
+      - "js-packages/**"
+
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Deploy target"
+        required: true
+        type: choice
+        options:
+          - "all" # 部署所有 apps
+          - "auto" # 基于 paths 自动检测
+          - "hono-demo"
+          - "proxy"
+          - "blog"
+          - "storefront"
+          - "admin"
+          - "api"
+
+env:
+  ECR_REGISTRY: YOUR_AWS_ACCOUNT_ID.dkr.ecr.us-west-2.amazonaws.com
+
+jobs:
+  # 检测变更
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      deploy_env: ${{ steps.set-env.outputs.deploy_env }}
+      branch_clean: ${{ steps.set-env.outputs.branch_clean }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 获取完整历史，以便 git diff 能找到 before commit
+
+      # 确定部署环境
+      - name: Determine deployment environment
+        id: set-env
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BRANCH="${{ github.head_ref }}"
+            DEPLOY_ENV="preview"
+          elif [ "${{ github.ref_name }}" = "main" ]; then
+            BRANCH="main"
+            DEPLOY_ENV="prod"
+          else
+            BRANCH="${{ github.ref_name }}"
+            DEPLOY_ENV="preview"
+          fi
+
+          # 清洗分支名
+          BRANCH_CLEAN=$(echo "$BRANCH" | sed 's/[^a-zA-Z0-9-]/-/g' | tr '[:upper:]' '[:lower:]' | cut -c1-30)
+
+          echo "deploy_env=$DEPLOY_ENV" >> $GITHUB_OUTPUT
+          echo "branch_clean=$BRANCH_CLEAN" >> $GITHUB_OUTPUT
+          echo "Deploy environment: $DEPLOY_ENV"
+          echo "Branch: $BRANCH (clean: $BRANCH_CLEAN)"
+
+      # 检测变更的服务（使用 git diff）
+      - name: Detect changed services
+        id: detect-changes
+        run: |
+          # 自动发现 js-apps 下的所有服务
+          ALL_SERVICES=$(ls -1 js-apps | tr '\n' ' ')
+          echo "All services: $ALL_SERVICES"
+
+          # 获取变更的文件
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # PR: 比较 base 和 head
+            CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...${{ github.head_ref }} 2>/dev/null || git diff --name-only HEAD~1 HEAD)
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
+          else
+            # workflow_dispatch: 比较最近两次 commit
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+          fi
+
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+
+          # 检查是否有共享包变更
+          SHARED_CHANGED="false"
+          if echo "$CHANGED_FILES" | grep -q "^js-packages/"; then
+            SHARED_CHANGED="true"
+            echo "Shared packages changed: true"
+          fi
+
+          # 检测哪些服务变更了
+          CHANGED_SERVICES=""
+          for svc in $ALL_SERVICES; do
+            if echo "$CHANGED_FILES" | grep -q "^js-apps/$svc/"; then
+              CHANGED_SERVICES="$CHANGED_SERVICES $svc"
+              echo "Service changed: $svc"
+            fi
+          done
+
+          echo "all_services=$ALL_SERVICES" >> $GITHUB_OUTPUT
+          echo "changed_services=$CHANGED_SERVICES" >> $GITHUB_OUTPUT
+          echo "shared_changed=$SHARED_CHANGED" >> $GITHUB_OUTPUT
+
+      # 构建部署矩阵
+      - name: Set deployment matrix
+        id: set-matrix
+        run: |
+          ALL_SERVICES="${{ steps.detect-changes.outputs.all_services }}"
+          CHANGED_SERVICES="${{ steps.detect-changes.outputs.changed_services }}"
+          SHARED_CHANGED="${{ steps.detect-changes.outputs.shared_changed }}"
+
+          # Helper: check if target server is configured in inventory
+          check_server_configured() {
+            local server="$1"
+            if grep -E "^\s+${server}:" ansible/inventory.yml > /dev/null 2>&1; then
+              return 0
+            fi
+            return 1
+          }
+
+          # Helper: get DEPLOY_SERVER from .env.example
+          get_deploy_server() {
+            local svc="$1"
+            local env_file="js-apps/${svc}/.env.example"
+            if [ -f "$env_file" ]; then
+              grep -E "^DEPLOY_SERVER=" "$env_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' || true
+            fi
+          }
+
+          # 手动触发
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TARGET="${{ inputs.target }}"
+
+            if [ "$TARGET" = "all" ]; then
+              DEPLOY_SERVICES="$ALL_SERVICES"
+            elif [ "$TARGET" = "auto" ]; then
+              # 基于文件变更自动检测
+              if [ "$SHARED_CHANGED" = "true" ]; then
+                DEPLOY_SERVICES="$ALL_SERVICES"
+              else
+                DEPLOY_SERVICES="$CHANGED_SERVICES"
+              fi
+            else
+              DEPLOY_SERVICES="$TARGET"
+            fi
+          else
+            # Push 或 PR 事件：自动检测
+            if [ "$SHARED_CHANGED" = "true" ]; then
+              DEPLOY_SERVICES="$ALL_SERVICES"
+              echo "Shared packages changed, deploying all services"
+            else
+              DEPLOY_SERVICES="$CHANGED_SERVICES"
+              echo "Deploying only changed services"
+            fi
+          fi
+
+          # 去除多余空格
+          DEPLOY_SERVICES=$(echo "$DEPLOY_SERVICES" | xargs)
+
+          # 过滤掉目标服务器未配置的服务
+          FILTERED_SERVICES=""
+          for svc in $DEPLOY_SERVICES; do
+            deploy_server=$(get_deploy_server "$svc")
+            if [ -n "$deploy_server" ] && ! check_server_configured "$deploy_server"; then
+              echo "⏭️  Skipping $svc (target server '$deploy_server' not configured)"
+            else
+              FILTERED_SERVICES="$FILTERED_SERVICES $svc"
+            fi
+          done
+          DEPLOY_SERVICES=$(echo "$FILTERED_SERVICES" | xargs)
+
+          # 构建 JSON matrix
+          if [ -z "$DEPLOY_SERVICES" ]; then
+            MATRIX='{"include":[]}'
+            echo "No services to deploy"
+          else
+            MATRIX_ITEMS=$(echo $DEPLOY_SERVICES | tr ' ' '\n' | sed 's/.*/{\"service\":\"&\"}/' | paste -sd ',' -)
+            MATRIX="{\"include\":[${MATRIX_ITEMS}]}"
+            echo "Services to deploy: $DEPLOY_SERVICES"
+          fi
+
+          echo "matrix=${MATRIX}" >> $GITHUB_OUTPUT
+          echo "Deployment matrix: ${MATRIX}"
+
+  # 前置：确保数据库存在（只运行一次，避免并行冲突）
+  db-prepare:
+    needs: detect
+    if: needs.detect.outputs.matrix != '{"include":[]}'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache mise
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/mise
+          key: mise-${{ runner.os }}-${{ hashFiles('.mise/config.toml') }}
+
+      - name: Install mise
+        run: |
+          curl https://mise.run | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Setup mise
+        run: |
+          mise install
+
+      - name: Cache Ansible Galaxy dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ansible/roles
+            ~/.ansible/collections
+          key: ansible-galaxy-${{ hashFiles('ansible/requirements.yml') }}
+
+      - name: Install Ansible Galaxy dependencies
+        run: |
+          ansible-galaxy install -r ansible/requirements.yml
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.CI_AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Load SSH key from Parameter Store
+        run: |
+          if [ "${{ needs.detect.outputs.deploy_env }}" = "prod" ]; then
+            PARAM_PATH="/studio-prod/"
+          else
+            PARAM_PATH="/studio-dev/"
+          fi
+
+          DEPLOY_SSH_KEY=$(aws ssm get-parameter --name "${PARAM_PATH}DEPLOY_SSH_KEY" --with-decryption --query "Parameter.Value" --output text)
+
+          mkdir -p ~/.ssh
+          echo "${DEPLOY_SSH_KEY}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+          echo "✅ SSH key loaded (env: ${{ needs.detect.outputs.deploy_env }})"
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region us-west-2 | \
+            docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+
+      - name: Run db-prepare (ensure databases exist)
+        run: |
+          mise run deploy-db-prepare
+        env:
+          ANSIBLE_SSH_PRIVATE_KEY_FILE: ~/.ssh/id_rsa
+
+  # 并行部署
+  deploy:
+    needs: [detect, db-prepare]
+    if: needs.detect.outputs.matrix != '{"include":[]}'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+      fail-fast: false
+    outputs:
+      deployed_services: ${{ steps.collect.outputs.services }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 缓存 mise 工具
+      - name: Cache mise
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/mise
+          key: mise-${{ runner.os }}-${{ hashFiles('.mise/config.toml') }}
+
+      # 安装 mise
+      - name: Install mise
+        run: |
+          curl https://mise.run | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      # 激活 mise 环境
+      - name: Setup mise
+        run: |
+          mise install
+
+      # 缓存 Ansible Galaxy 依赖
+      - name: Cache Ansible Galaxy dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ansible/roles
+            ~/.ansible/collections
+          key: ansible-galaxy-${{ hashFiles('ansible/requirements.yml') }}
+
+      # 安装 Ansible Galaxy 依赖
+      - name: Install Ansible Galaxy dependencies
+        run: |
+          ansible-galaxy install -r ansible/requirements.yml
+
+      # 缓存 pnpm store（按照最佳实践）
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      # 配置 AWS（用于 ECR 和 Parameter Store）
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.CI_AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      # 从 Parameter Store 读取 SSH Key
+      - name: Load SSH key from Parameter Store
+        run: |
+          # 根据环境选择配置路径
+          if [ "${{ needs.detect.outputs.deploy_env }}" = "prod" ]; then
+            PARAM_PATH="/studio-prod/"
+          else
+            PARAM_PATH="/studio-dev/"
+          fi
+
+          # 读取 SSH key
+          DEPLOY_SSH_KEY=$(aws ssm get-parameter --name "${PARAM_PATH}DEPLOY_SSH_KEY" --with-decryption --query "Parameter.Value" --output text)
+
+          # 保存 SSH key 到文件
+          mkdir -p ~/.ssh
+          echo "${DEPLOY_SSH_KEY}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+          echo "✅ SSH key loaded (env: ${{ needs.detect.outputs.deploy_env }})"
+
+      # 登录 ECR
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region us-west-2 | \
+            docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+
+      # 部署服务
+      - name: Deploy ${{ matrix.service }}
+        run: |
+          mise run deploy-${{ matrix.service }}
+        env:
+          DOCKER_BUILDKIT: 1
+          BUILDKIT_PROGRESS: plain
+          ANSIBLE_SSH_PRIVATE_KEY_FILE: ~/.ssh/id_rsa
+
+      # 运行 post-deploy hook（如果存在）
+      - name: Run post-deploy hook
+        if: hashFiles(format('js-apps/{0}/post-deploy.sh', matrix.service)) != ''
+        run: |
+          echo "🔧 Running post-deploy for ${{ matrix.service }}..."
+          mise run post-deploy-${{ matrix.service }}
+
+      # 部署结果通知
+      - name: Deployment summary
+        if: always()
+        run: |
+          SERVICE="${{ matrix.service }}"
+          DEPLOY_ENV="${{ needs.detect.outputs.deploy_env }}"
+          SUMMARY_FILE="js-apps/${SERVICE}/deploy-dist/DEPLOY_SUMMARY.txt"
+
+          echo "### Deployment Result: ${SERVICE} 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # 从 DEPLOY_SUMMARY.txt 读取 URL
+          if [ -f "$SUMMARY_FILE" ]; then
+            echo "🔗 **URLs:**" >> $GITHUB_STEP_SUMMARY
+            while IFS= read -r url; do
+              echo "- [${url}](${url})" >> $GITHUB_STEP_SUMMARY
+            done < "$SUMMARY_FILE"
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "- Service: \`${SERVICE}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Environment: \`${DEPLOY_ENV}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Trigger: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+      # 上传 DEPLOY_SUMMARY.txt 供 PR comment 使用
+      - name: Upload deploy summary
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-summary-${{ matrix.service }}
+          path: js-apps/${{ matrix.service }}/deploy-dist/DEPLOY_SUMMARY.txt
+          if-no-files-found: ignore
+          retention-days: 1
+
+  # PR 评论预览 URL
+  comment:
+    needs: [detect, deploy]
+    if: github.event_name == 'pull_request' && needs.detect.outputs.deploy_env == 'preview'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      # 下载所有 deploy-summary artifacts
+      - name: Download deploy summaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: deploy-summary-*
+          path: summaries
+          merge-multiple: false
+
+      # 读取所有 URL 并生成评论
+      - name: Comment preview URLs on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const branchClean = '${{ needs.detect.outputs.branch_clean }}';
+            const matrix = ${{ needs.detect.outputs.matrix }};
+            const services = matrix.include.map(item => item.service);
+
+            // 从 artifacts 读取真实 URL (single source of truth: .env.example -> .env -> DEPLOY_SUMMARY.txt)
+            // DEPLOY_SUMMARY.txt 可能包含多行 URL（多端口场景）
+            const urlLines = [];
+            for (const service of services) {
+              const summaryPath = path.join('summaries', `deploy-summary-${service}`, 'DEPLOY_SUMMARY.txt');
+              try {
+                const content = fs.readFileSync(summaryPath, 'utf8').trim();
+                const urls = content.split('\n').filter(u => u.length > 0);
+                if (urls.length === 1) {
+                  urlLines.push(`- **${service}**: ${urls[0]}`);
+                } else {
+                  // 多 URL 场景，缩进显示
+                  urlLines.push(`- **${service}**:`);
+                  urls.forEach(url => urlLines.push(`  - ${url}`));
+                }
+              } catch (e) {
+                // Fallback if file doesn't exist
+                urlLines.push(`- **${service}**: https://${service}--${branchClean}.preview.owenyoung.com`);
+              }
+            }
+
+            const body = `## 🚀 Preview Deployment
+
+            Your changes have been deployed to the preview environment!
+
+            ### Preview URLs
+            ${urlLines.join('\n')}
+
+            ### Details
+            - **Branch**: \`${{ github.head_ref }}\`
+            - **Commit**: \`${{ github.sha }}\`
+            - **Environment**: preview
+
+            > ℹ️ Preview environments are automatically cleaned up when the PR is merged or closed.
+            > Use \`mise run preview-delete ${branchClean}\` to manually clean up.
+            `;
+
+            // 查找已有的评论
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('Preview Deployment')
+            );
+
+            if (botComment) {
+              // 更新已有评论
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              // 创建新评论
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }

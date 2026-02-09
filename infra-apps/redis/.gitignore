@@ -1,0 +1,12 @@
+# Environment files
+.env
+
+# Local data and backups
+.local/
+
+# Redis data files
+*.rdb
+*.aof
+
+# Logs
+*.log

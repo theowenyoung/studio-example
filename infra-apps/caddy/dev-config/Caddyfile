@@ -1,0 +1,110 @@
+# 全局日志配置
+{
+    # 控制台日志（人类可读）
+    log {
+        output stdout
+        format console
+        level INFO
+    }
+}
+
+
+(local_tls) {
+    tls /certs/local-dev.pem /certs/local-dev-key.pem
+}
+
+(proxy) {
+    import local_tls
+    reverse_proxy host.docker.internal:{args[0]} {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+
+# Admin - Vite 开发服务器
+admin.local.owenyoung.com {
+    import proxy 9001
+}
+
+# API - Node.js 服务
+api.local.owenyoung.com {
+    import proxy 8003
+}
+
+# Blog - Remix 开发服务器
+blog.local.owenyoung.com {
+    import proxy 9002
+}
+
+# Storefront - Next.js 开发服务器
+storefront.local.owenyoung.com {
+    import proxy 9003
+}
+hono.local.owenyoung.com {
+    import proxy 8001
+}
+proxy.local.owenyoung.com {
+    import proxy 8002
+}
+hono-prod2-demo.local.owenyoung.com {
+    import proxy 8004
+}
+umami.local.owenyoung.com {
+    import proxy 9004
+}
+meilisearch.local.owenyoung.com {
+    import proxy 9005
+}
+status.local.owenyoung.com {
+    import proxy 9006
+}
+n8n.local.owenyoung.com {
+    import proxy 9007
+}
+outline.local.owenyoung.com {
+    import proxy 9008
+}
+blog.local.owenyoung.com {
+    import proxy 9010
+}
+
+chyrp.local.owenyoung.com {
+    import proxy 9011
+}
+gotosocial.local.owenyoung.com {
+    import proxy 9012
+}
+
+honk.local.owenyoung.com {
+    import proxy 9013
+}
+clip.local.owenyoung.com {
+    import proxy 9014
+}
+highlights.local.owenyoung.com {
+    import proxy 9015
+}
+bookmarks.local.owenyoung.com {
+    import proxy 9016
+}
+snapshots.local.owenyoung.com {
+    import proxy 9017
+}
+share.local.owenyoung.com {
+    import proxy 9018
+}
+
+jant.local.owenyoung.com {
+    import proxy 9019
+}
+
+reddit.local.owenyoung.com {
+    import proxy 9020
+}
+
+# Fallback for undefined services
+*.local.owenyoung.com {
+    import local_tls
+    respond "Service not found." 404
+}

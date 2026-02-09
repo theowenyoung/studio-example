@@ -1,0 +1,7 @@
+# ==================== Application Services (prod2) ====================
+
+# Hono Prod2 Demo
+hono-prod2-demo.owenyoung.com {
+    import app_cache
+    import resilient_proxy hono-prod2-demo:3000
+}

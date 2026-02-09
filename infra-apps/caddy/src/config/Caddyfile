@@ -1,0 +1,45 @@
+{
+    # 全局配置
+    email owen@owenyoung.com
+
+    # 日志配置
+    log {
+        level INFO
+        output stdout
+        format json {
+            time_format "iso8601"
+        }
+    }
+
+    # 性能优化
+    servers {
+        # 协议优化（启用 HTTP/3）
+        protocols h1 h2 h3
+
+        # 连接超时
+        timeouts {
+            read_body   30s
+            read_header 30s
+            write       30s
+            idle        5m
+        }
+
+        # 最大请求头大小（10MB）
+        max_header_size 10MB
+    }
+}
+
+# ==================== Import Snippets ====================
+import snippets/*.caddy
+
+# ==================== Production Environments ====================
+import production/*.caddy
+
+# ==================== Preview Environments ====================
+# 预览环境配置由部署脚本自动生成
+# 不提交到 Git，分支删除时自动清理
+import preview/*.caddy
+
+# ==================== Preview Fallback ====================
+# 通配符 fallback，为已删除的 preview 环境返回 404
+import preview-fallback/*.caddy

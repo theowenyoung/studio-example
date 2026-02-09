@@ -1,0 +1,39 @@
+# ==================== Cache Snippets ====================
+
+(common_cache) {
+    # 启用压缩（统一在 Caddy 层处理）
+    encode gzip zstd
+
+    # 静态资源长缓存（1年）
+    # 使用 path_regexp 匹配任意深度路径（path *.js 只匹配根目录）
+    # 注意：不包含 JSON/XML，因为它们可能是 API 响应
+    @static path_regexp \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|webp|avif)$
+    header @static Cache-Control "public, max-age=31536000, immutable"
+
+    # XML 短缓存（1分钟）- sitemap.xml, feed.xml 等
+    @xml path_regexp \.xml$
+    header @xml Cache-Control "public, max-age=60"
+}
+
+(ssg_cache) {
+    import common_cache
+
+    # HTML 不缓存（但允许 revalidate）
+    @html path *.html / /*/
+    header @html Cache-Control "public, max-age=0, must-revalidate"
+}
+
+(app_cache) {
+    # 启用压缩（统一在 Caddy 层处理）
+    encode gzip zstd
+
+    # 静态资源长缓存（1年）
+    # 使用 path_regexp 匹配任意深度路径（path *.js 只匹配根目录）
+    # 不包含 JSON/XML - 它们通常是 API 响应
+    @static path_regexp \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|webp|avif)$
+    header @static Cache-Control "public, max-age=31536000, immutable"
+
+    # 默认：其他请求都不缓存（动态应用优先保证新鲜度）
+    @notStatic not path_regexp \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|webp|avif)$
+    header @notStatic Cache-Control "public, max-age=0, must-revalidate"
+}

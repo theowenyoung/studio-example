@@ -1,0 +1,266 @@
+---
+# 验证安全相关服务是否正常运行
+- name: Check SSH service status
+  systemd:
+    name: "{{ 'ssh' if ansible_os_family == 'Debian' else 'sshd' }}"
+  register: ssh_service
+  tags: [verify, ssh]
+
+- name: Verify SSH is running
+  assert:
+    that:
+      - ssh_service.status.ActiveState == "active"
+    fail_msg: "SSH service is not running properly"
+    success_msg: "SSH service is running"
+  tags: [verify, ssh]
+- name: Debug OS information
+  debug:
+    msg:
+      - "OS Family: {{ ansible_os_family }}"
+      - "Distribution: {{ ansible_distribution }}"
+      - "Distribution Version: {{ ansible_distribution_version }}"
+  tags: [verify, firewall, debug]
+
+- name: Check if iptables is available (required for geerlingguy.firewall)
+  command: which iptables
+  register: iptables_available
+  changed_when: false
+  ignore_errors: yes
+  tags: [verify, firewall, debug]
+
+- name: Display iptables availability
+  debug:
+    msg: "iptables: {{ 'Available ✓' if iptables_available.rc == 0 else 'Not found ✗ - Required for geerlingguy.firewall!' }}"
+  tags: [verify, firewall, debug]
+
+- name: Check if firewalld is disabled (should be inactive)
+  systemd:
+    name: firewalld
+  register: firewalld_service_check
+  ignore_errors: yes
+  tags: [verify, firewall]
+
+- name: Check if ufw is disabled (should be inactive) 
+  systemd:
+    name: ufw
+  register: ufw_service_check
+  ignore_errors: yes
+  tags: [verify, firewall]
+
+- name: Verify conflicting firewalls are disabled
+  debug:
+    msg:
+      - "Firewalld status: {{ 'Properly disabled' if firewalld_service_check is defined and (firewalld_service_check.status.ActiveState != 'active' or firewalld_service_check.status.UnitFileState == 'disabled') else 'WARNING: Still active - may conflict!' }}"
+      - "UFW status: {{ 'Properly disabled' if ufw_service_check is defined and (ufw_service_check.status.ActiveState != 'active' or ufw_service_check.status.UnitFileState == 'disabled') else 'WARNING: Still active - may conflict!' }}"
+  tags: [verify, firewall]
+
+- name: Check geerlingguy firewall service (iptables-based)
+  systemd:
+    name: firewall
+  register: geerling_firewall_service
+  ignore_errors: yes
+  tags: [verify, firewall]
+
+- name: Check geerlingguy firewall status
+  command: service firewall status
+  register: geerling_firewall_status
+  changed_when: false
+  ignore_errors: yes
+  when: geerling_firewall_service is defined
+  tags: [verify, firewall]
+
+- name: Check iptables rules
+  command: iptables -L -n
+  register: iptables_rules
+  changed_when: false
+  ignore_errors: yes
+  tags: [verify, firewall]
+
+- name: Count iptables rules
+  set_fact:
+    iptables_rule_count: "{{ iptables_rules.stdout_lines | length }}"
+  when: 
+    - iptables_rules is defined
+    - iptables_rules.rc == 0
+  tags: [verify, firewall]
+
+- name: Check for custom firewall rules (geerlingguy pattern)
+  command: iptables -L INPUT -n --line-numbers
+  register: iptables_input_rules
+  changed_when: false
+  ignore_errors: yes
+  tags: [verify, firewall]
+
+- name: Display firewall status summary
+  debug:
+    msg: 
+      - "========== Firewall Status Summary =========="
+      - "Primary Firewall (geerlingguy.firewall): {{ 'Active ✓' if geerling_firewall_service is defined and geerling_firewall_service.status.ActiveState == 'active' else 'Inactive ✗' }}"
+      - "Iptables rules configured: {{ iptables_rule_count | default('N/A') }} rules"
+      - "Conflicting firewall services:"
+      - "  - firewalld: {{ 'Disabled ✓' if firewalld_service_check is defined and firewalld_service_check.status.ActiveState != 'active' else 'WARNING: Active!' }}"
+      - "  - ufw: {{ 'Disabled ✓' if ufw_service_check is defined and ufw_service_check.status.ActiveState != 'active' else 'WARNING: Active!' }}"
+      - "============================================="
+  when: geerling_firewall_service is defined or iptables_rules is defined
+  tags: [verify, firewall]
+- name: Check fail2ban service (prod only)
+  systemd:
+    name: fail2ban
+  register: fail2ban_service
+  when:
+    - deploy_environment == "prod"
+    - security_fail2ban_enabled | default(true)
+  ignore_errors: yes
+  tags: [verify, fail2ban]
+
+- name: Verify fail2ban is running (prod only)
+  assert:
+    that:
+      - fail2ban_service.status.ActiveState == "active"
+    fail_msg: "Fail2ban service is not running - security may be compromised"
+    success_msg: "Fail2ban service is running"
+  when:
+    - deploy_environment == "prod"
+    - fail2ban_service is defined
+    - fail2ban_service is not skipped
+  ignore_errors: "{{ deploy_environment == 'testing' }}"
+  tags: [verify, fail2ban]
+
+- name: Check Docker service
+  systemd:
+    name: docker
+  register: docker_service
+  tags: [verify, docker]
+
+- name: Verify Docker is running
+  assert:
+    that:
+      - docker_service.status.ActiveState == "active"
+    fail_msg: "Docker service is not running"
+    success_msg: "Docker service is running"
+  tags: [verify, docker]
+
+- name: Test Docker functionality
+  command: docker ps
+  register: docker_ps
+  changed_when: false
+  become_user: deploy
+  tags: [verify, docker]
+
+
+- name: Verify critical ports are listening
+  wait_for:
+    port: "{{ item }}"
+    host: 0.0.0.0
+    timeout: 5
+  loop:
+    - 22
+  ignore_errors: yes
+  register: port_check
+  tags: [verify, ports]
+
+- name: Display port check results
+  debug:
+    msg: "Port {{ item.item }} is {{ 'open' if item is not failed else 'closed' }}"
+  loop: "{{ port_check.results }}"
+  when: port_check is defined
+  tags: [verify, ports]
+
+- name: Check system updates (prod only)
+  command: apt list --upgradable
+  register: upgradable_packages
+  changed_when: false
+  when:
+    - ansible_os_family == "Debian"
+    - deploy_environment == "prod"
+  tags: [verify, updates]
+
+- name: Count upgradable packages
+  set_fact:
+    upgradable_count: "{{ upgradable_packages.stdout_lines | length - 1 }}"
+  when: 
+    - upgradable_packages is defined
+    - upgradable_packages is not skipped
+  tags: [verify, updates]
+
+- name: Warn about pending updates
+  debug:
+    msg: "WARNING: {{ upgradable_count }} packages have pending updates"
+  when: 
+    - upgradable_count is defined
+    - upgradable_count | int > 10
+  tags: [verify, updates]
+
+- name: Verify sudo access for deploy user
+  become: yes
+  become_user: deploy
+  command: sudo -n true
+  register: sudo_check
+  changed_when: false
+  ignore_errors: yes
+  tags: [verify, sudo]
+
+- name: Assert sudo access is configured
+  assert:
+    that:
+      - sudo_check.rc == 0
+    fail_msg: "Deploy user does not have passwordless sudo access"
+    success_msg: "Deploy user has proper sudo access"
+  tags: [verify, sudo]
+
+- name: Check disk usage
+  command: df -h /
+  register: disk_usage
+  changed_when: false
+  tags: [verify, disk]
+
+- name: Parse disk usage
+  set_fact:
+    disk_used_percent: "{{ disk_usage.stdout_lines[1].split()[4].rstrip('%') }}"
+  when: disk_usage is defined
+  tags: [verify, disk]
+
+- name: Warn about disk space
+  debug:
+    msg: "WARNING: Disk usage is {{ disk_used_percent }}%"
+  when: 
+    - disk_used_percent is defined
+    - disk_used_percent | int > 80
+  tags: [verify, disk]
+
+- name: Generate security verification summary
+  debug:
+    msg:
+      - "===== Security Verification Summary ====="
+      - "Environment: {{ deploy_environment }}"
+      - "SSH Service: {{ 'Running' if ssh_service.status.ActiveState == 'active' else 'Not Running' }}"
+      - "Firewall: {{ 'Active (geerlingguy.firewall)' if geerling_firewall_service is defined and geerling_firewall_service.status.ActiveState == 'active' else 'Inactive' }}"
+      - "Docker: {{ 'Running' if docker_service.status.ActiveState == 'active' else 'Not Running' }}"
+      - "Fail2ban: {{ 'Running' if deploy_environment == 'prod' and fail2ban_service is defined and fail2ban_service.status.ActiveState == 'active' else 'Not Required' if deploy_environment == 'testing' else 'Not Running' }}"
+      - "Disk Usage: {{ disk_used_percent | default('Unknown') }}%"
+      - "========================================="
+  tags: [verify, summary]
+
+- name: Create verification report file
+  copy:
+    content: |
+      Security Verification Report
+      Generated: {{ ansible_date_time.iso8601 }}
+      Environment: {{ deploy_environment }}
+      Host: {{ inventory_hostname }}
+      
+      Service Status:
+      - SSH: {{ 'OK' if ssh_service.status.ActiveState == 'active' else 'FAIL' }}
+      - Firewall: {{ 'OK (geerlingguy.firewall)' if geerling_firewall_service is defined and geerling_firewall_service.status.ActiveState == 'active' else 'FAIL' }}
+      - Docker: {{ 'OK' if docker_service.status.ActiveState == 'active' else 'FAIL' }}
+      - Fail2ban: {{ 'OK' if deploy_environment == 'prod' and fail2ban_service is defined and fail2ban_service.status.ActiveState == 'active' else 'N/A' }}
+      
+      System Status:
+      - Disk Usage: {{ disk_used_percent | default('Unknown') }}%
+      - Pending Updates: {{ upgradable_count | default('Unknown') }}
+      
+      Verification completed successfully.
+    dest: /var/log/ansible-security-verify-{{ ansible_date_time.epoch }}.log
+    mode: '0644'
+  when: deploy_environment == "prod"
+  tags: [verify, report]

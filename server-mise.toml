@@ -1,0 +1,188 @@
+# Server Operations - mise tasks
+# This file is synced to /srv/mise.toml via Ansible
+#
+# Usage on server:
+#   mise tasks          # List all tasks
+#   mise run <task>     # Run a task
+#   m <task>            # Use alias
+
+# ==================== Database Operations ====================
+
+[tasks.db-restore-local]
+description = "Restore PostgreSQL from latest local backup"
+run = "cd /srv/backup && docker compose run --rm backup /usr/local/bin/restore-postgres-local.sh latest"
+
+[tasks.db-restore-s3]
+description = "Restore PostgreSQL from latest S3 backup"
+run = "cd /srv/backup && docker compose run --rm backup /usr/local/bin/restore-postgres-s3.sh latest"
+
+[tasks.db-list-local]
+description = "List local backup files"
+run = "ls -lh /data/backups/postgres/"
+
+[tasks.db-list-s3]
+description = "List S3 backups"
+run = "cd /srv/backup && docker compose run --rm backup /usr/local/bin/list-s3-postgres.sh"
+
+[tasks.db-backup-now]
+description = "Create PostgreSQL backup now"
+run = "cd /srv/backup && docker compose run --rm backup /usr/local/bin/backup-postgres.sh"
+
+# ==================== Backup Operations ====================
+
+[tasks.backup]
+alias = "backup-all"
+description = "Run full backup (PostgreSQL + Redis + SQLite)"
+run = "cd /srv/backup && docker compose run --rm backup /usr/local/bin/backup-all.sh"
+
+[tasks.backup-sqlite]
+description = "Run SQLite backup only"
+run = "cd /srv/backup && docker compose run --rm backup /usr/local/bin/backup-sqlite.sh"
+
+[tasks.backup-list]
+description = "List all backup files"
+run = """
+echo "=== PostgreSQL ===" && ls -lht /data/backups/postgres/ 2>/dev/null | head -10 || echo "No backups"
+echo -e "\n=== Redis ===" && ls -lht /data/backups/redis/ 2>/dev/null | head -10 || echo "No backups"
+echo -e "\n=== SQLite ===" && ls -lht /data/backups/sqlite/ 2>/dev/null | head -10 || echo "No backups"
+"""
+
+[tasks.backup-logs]
+description = "View backup service logs"
+run = "cd /srv/backup && docker compose logs --tail=100 backup"
+
+[tasks.db-clean-all]
+description = "⚠️  DANGER: Delete ALL PostgreSQL data (stops container & removes volumes)"
+run = """
+echo "⚠️  WARNING: This will DELETE ALL PostgreSQL data!"
+echo "This includes:"
+echo "  - All databases"
+echo "  - All users"
+echo "  - All configurations"
+echo ""
+read -p "Type 'DELETE ALL DATA' to confirm: " confirm
+if [ "$confirm" != "DELETE ALL DATA" ]; then
+    echo "❌ Operation cancelled"
+    exit 1
+fi
+echo ""
+echo "🛑 Stopping PostgreSQL container..."
+cd /srv/postgres && docker compose down -v
+echo "✅ All PostgreSQL data has been deleted"
+echo ""
+echo "To reinitialize:"
+echo "  cd /srv/postgres && docker compose up -d"
+echo "  mr dev-db-prepare  # Run database initialization"
+"""
+
+# ==================== Application Management ====================
+
+[tasks.app-logs]
+alias = "logs"
+description = "View application logs (follow)"
+run = "cd /srv/app && docker compose logs -f api"
+
+[tasks.app-logs-tail]
+description = "View last 100 lines of app logs"
+run = "cd /srv/app && docker compose logs --tail=100 api"
+
+[tasks.app-restart]
+alias = "restart"
+description = "Restart application"
+run = "cd /srv/app && docker compose restart api"
+
+[tasks.app-stop]
+description = "Stop application"
+run = "cd /srv/app && docker compose stop api"
+
+[tasks.app-start]
+description = "Start application"
+run = "cd /srv/app && docker compose start api"
+
+[tasks.app-shell]
+description = "Enter application container shell"
+run = "cd /srv/app && docker compose exec api bash"
+
+[tasks.app-ps]
+alias = "ps"
+description = "Show running containers"
+run = "cd /srv/app && docker compose ps"
+
+# ==================== Infrastructure Services ====================
+
+[tasks.postgres-logs]
+description = "View PostgreSQL logs"
+run = "cd /srv/postgres && docker compose logs -f postgres"
+
+[tasks.db]
+alias = "postgres-shell"
+description = "Connect to PostgreSQL database"
+run = "cd /srv/postgres && docker compose exec postgres psql -U postgres"
+
+[tasks.redis-logs]
+description = "View Redis logs"
+run = "cd /srv/redis && docker compose logs -f redis"
+
+[tasks.redis-cli]
+description = "Enter Redis CLI"
+run = "cd /srv/redis && docker compose exec redis redis-cli"
+
+[tasks.caddy-logs]
+description = "View Caddy logs"
+run = "cd /srv/caddy && docker compose logs -f caddy"
+
+[tasks.caddy-reload]
+description = "Reload Caddy configuration"
+run = "cd /srv/caddy && docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile"
+
+# ==================== All Services ====================
+
+[tasks.status]
+description = "Show status of all services"
+run = """
+echo "=== Application ===" && cd /srv/app && docker compose ps
+echo -e "\n=== PostgreSQL ===" && cd /srv/postgres && docker compose ps
+echo -e "\n=== Redis ===" && cd /srv/redis && docker compose ps
+echo -e "\n=== Caddy ===" && cd /srv/caddy && docker compose ps
+"""
+
+[tasks.restart-all]
+description = "Restart all services"
+run = """
+cd /srv/app && docker compose restart
+cd /srv/postgres && docker compose restart
+cd /srv/redis && docker compose restart
+cd /srv/caddy && docker compose restart
+"""
+
+# ==================== System Monitoring ====================
+
+[tasks.disk]
+description = "Show disk usage"
+run = "df -h"
+
+[tasks.disk-data]
+description = "Show /data directory usage"
+run = "du -sh /data/* | sort -h"
+
+[tasks.mem]
+description = "Show memory usage"
+run = "free -h"
+
+[tasks.docker-stats]
+description = "Show Docker container resource usage"
+run = "docker stats --no-stream"
+
+[tasks.docker-prune]
+description = "Clean up unused Docker resources"
+run = "docker system prune -f && docker volume prune -f"
+
+# ==================== Logs Management ====================
+
+[tasks.logs-app]
+description = "Follow all application logs"
+run = "tail -f /data/logs/app/*.log"
+
+[tasks.logs-nginx]
+description = "Follow nginx/caddy access logs"
+run = "cd /srv/caddy && docker compose logs -f"

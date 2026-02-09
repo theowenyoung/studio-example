@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./config:/usr/local/etc/redis:ro
+      - redis_data:/data
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--requirepass", "${COMMON_REDIS_PASSWORD}"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a ${COMMON_REDIS_PASSWORD} ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - shared
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  redis_data:
+    # Docker 管理的 volume，数据存储在 /data/docker/volumes/ (因为 data-root=/data/docker)
+
+networks:
+  shared:
+    external: true

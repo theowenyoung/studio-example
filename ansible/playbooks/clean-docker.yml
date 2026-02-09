@@ -1,0 +1,103 @@
+---
+# 清理 Docker（完全卸载 + 备份数据）
+# 使用场景：系统重建前彻底清理 Docker
+- name: Clean Docker (Uninstall + Backup Data)
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  vars:
+    docker_data_root: /data/docker
+
+  tasks:
+    # 1. 备份数据目录
+    - name: Check if Docker data directory exists
+      stat:
+        path: "{{ docker_data_root }}"
+      register: docker_data_dir
+
+    - name: Create backup directory name with timestamp
+      set_fact:
+        backup_path: "{{ docker_data_root }}.old-{{ ansible_date_time.iso8601_basic_short }}"
+      when: docker_data_dir.stat.exists
+
+    - name: Move Docker data directory to backup
+      command: mv "{{ docker_data_root }}" "{{ backup_path }}"
+      when: docker_data_dir.stat.exists
+
+    # 2. 完全卸载 Docker（官方推荐方式）
+    - name: Purge Docker packages
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+          - docker-ce-rootless-extras
+        state: absent
+        purge: yes
+      ignore_errors: yes
+
+    # 3. 清理残留的 Docker 网桥接口
+    # apt purge 不保证清理网桥，需要手动删除
+    - name: Find Docker bridge interfaces
+      shell: ip link show | grep -oP 'br-[a-f0-9]+' | sort -u
+      register: docker_bridges
+      changed_when: false
+      failed_when: false
+
+    - name: Remove Docker bridge interfaces
+      shell: |
+        ip link set {{ item }} down
+        ip link delete {{ item }}
+      loop: "{{ docker_bridges.stdout_lines }}"
+      when: docker_bridges.stdout_lines | length > 0
+      ignore_errors: yes
+
+    # 4. 清理残留的 iptables 规则
+    - name: Flush Docker iptables chains
+      shell: |
+        iptables -t nat -F DOCKER 2>/dev/null || true
+        iptables -t nat -X DOCKER 2>/dev/null || true
+        iptables -F DOCKER 2>/dev/null || true
+        iptables -F DOCKER-USER 2>/dev/null || true
+        iptables -F DOCKER-ISOLATION-STAGE-1 2>/dev/null || true
+        iptables -F DOCKER-ISOLATION-STAGE-2 2>/dev/null || true
+        iptables -X DOCKER 2>/dev/null || true
+        iptables -X DOCKER-USER 2>/dev/null || true
+        iptables -X DOCKER-ISOLATION-STAGE-1 2>/dev/null || true
+        iptables -X DOCKER-ISOLATION-STAGE-2 2>/dev/null || true
+      changed_when: false
+      ignore_errors: yes
+
+    # 5. 清理默认数据目录（如果存在）
+    - name: Remove default Docker directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/docker
+        - /var/lib/containerd
+      ignore_errors: yes
+
+    # 6. 清理配置文件
+    - name: Remove Docker config
+      file:
+        path: /etc/docker/daemon.json
+        state: absent
+      ignore_errors: yes
+
+    - name: Display completion message
+      debug:
+        msg:
+          - "✅ Docker 已完全卸载"
+          - ""
+          - "{% if docker_data_dir.stat.exists %}📦 数据已备份到: {{ backup_path }}{% else %}ℹ️  无数据需要备份{% endif %}"
+          - "{% if docker_bridges.stdout_lines | length > 0 %}🌉 已清理网桥: {{ docker_bridges.stdout_lines | join(', ') }}{% endif %}"
+          - ""
+          - "下一步："
+          - "  mise run server-update  # 重新安装和配置 Docker"
+          - ""
+          - "💡 如需恢复数据："
+          - "  mv {{ backup_path | default(docker_data_root + '.old-*') }} {{ docker_data_root }}"

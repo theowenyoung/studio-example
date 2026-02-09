@@ -1,0 +1,44 @@
+services:
+  backup:
+    image: ${IMAGE_TAG}
+    restart: unless-stopped
+    env_file:
+      - .env  # 从 .env 加载敏感信息：POSTGRES_ADMIN_URL, REDIS_DOCKER_URL, S3 凭证等
+    environment:
+      ENVIRONMENT: prod
+      # 非敏感配置，直接在这里设置
+      S3_REGION: us-east-005
+      BACKUP_RETENTION_LOCAL: 3
+      BACKUP_RETENTION_S3: 30
+
+      # Cron 调度
+      BACKUP_SCHEDULE: "0 21 * * *"     # 每天 UTC 21:00 (北京时间凌晨5点) 全量备份
+      CLEANUP_SCHEDULE: "0 22 * * *"    # 每天 UTC 22:00 (北京时间凌晨6点) 清理
+
+      TZ: UTC
+
+    volumes:
+      # 生产环境使用 /data/backups/
+      - /data/backups:/backups
+      # 挂载 Docker volumes 目录用于 SQLite 备份（只读）
+      - /data/docker/volumes:/docker-volumes:ro
+
+    networks:
+      - shared
+
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /var/log/backup.log || exit 1"]
+      interval: 1h
+      timeout: 30s
+      retries: 3
+      start_period: 1m
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"  # 生产环境日志更大
+        max-file: "5"
+
+networks:
+  shared:
+    external: true

@@ -1,0 +1,105 @@
+---
+- name: Deploy Redis Infrastructure
+  hosts: all  # 部署到所有服务器
+  gather_facts: no
+
+  vars:
+    service_name: "redis"
+    local_dist: "{{ playbook_dir }}/../../infra-apps/redis/deploy-dist"
+    remote_dir: "/srv/redis"
+
+  tasks:
+    - debug:
+        msg: "🚀 Deploying Redis"
+
+    - name: Ensure service directory exists
+      file:
+        path: "{{ remote_dir }}"
+        state: directory
+        owner: "{{ deploy_user | default('deploy') }}"
+        group: "{{ deploy_user | default('deploy') }}"
+        mode: '0755'
+
+    # ===== Sync files =====
+    - name: Sync deploy-dist to server
+      synchronize:
+        src: "{{ local_dist }}/"
+        dest: "{{ remote_dir }}/"
+        delete: yes
+        owner: no
+        group: no
+
+    # ===== Docker operations =====
+    - name: Login to ECR
+      shell: |
+        aws ecr get-login-password --region {{ ecr_region }} | \
+          docker login --username AWS --password-stdin {{ ecr_registry }}
+      environment:
+        AWS_DEFAULT_REGION: "{{ ecr_region }}"
+      changed_when: false
+      when: ecr_registry is defined
+
+    - name: Pull new images
+      shell: |
+        cd {{ remote_dir }}
+        docker compose pull --quiet
+      register: pull_result
+      changed_when: pull_result.stdout != ""
+
+    - name: Docker compose up
+      shell: |
+        cd {{ remote_dir }}
+        docker compose up -d --remove-orphans
+      register: deploy_result
+
+    - debug:
+        msg: "{{ deploy_result.stdout_lines }}"
+
+    - name: Check if service was restarted
+      set_fact:
+        service_restarted: "{{ 'Recreated' in deploy_result.stdout or 'Started' in deploy_result.stdout or 'Created' in deploy_result.stdout }}"
+
+    - name: Force restart if no changes detected
+      shell: |
+        cd {{ remote_dir }}
+        docker compose restart {{ service_name }}
+      when: not service_restarted
+      register: force_restart_result
+
+    - name: Display force restart message
+      debug:
+        msg: "🔄 No changes detected, forced restart of {{ service_name }}"
+      when: not service_restarted
+
+    # ===== Health check =====
+    - name: Wait for Redis to be healthy
+      shell: |
+        cd {{ remote_dir }}
+        docker compose ps redis --format json 2>/dev/null | jq -r '.State // empty' | head -1
+      register: container_state
+      until: container_state.stdout == "running" or container_state.stdout == "running (healthy)"
+      retries: 12
+      delay: 5
+      failed_when: false
+
+    - name: Get container logs if deployment failed
+      shell: |
+        cd {{ remote_dir }}
+        docker compose logs --tail=50 redis
+      register: container_logs
+      when: container_state.stdout != "running" and container_state.stdout != "running (healthy)"
+
+    - name: Display container logs
+      debug:
+        msg: "{{ container_logs.stdout_lines }}"
+      when: container_logs is defined and container_logs.stdout_lines is defined
+
+    - name: Fail if deployment unsuccessful
+      fail:
+        msg: "❌ Deployment of Redis failed! Check logs above."
+      when: container_state.stdout != "running" and container_state.stdout != "running (healthy)"
+
+    - name: Display success message
+      debug:
+        msg: "✅ Successfully deployed Redis"
+      when: container_state.stdout == "running" or container_state.stdout == "running (healthy)"

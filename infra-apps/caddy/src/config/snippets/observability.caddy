@@ -1,0 +1,11 @@
+# ==================== Observability ====================
+# 生产环境的可观测性配置 - 保留用于持续监控
+(observability) {
+    # 访问日志（JSON 格式，便于日志系统解析）
+    log {
+        output stdout
+        format json {
+            time_format "iso8601"
+        }
+    }
+}

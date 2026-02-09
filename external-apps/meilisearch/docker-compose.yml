@@ -1,0 +1,39 @@
+services:
+  meilisearch:
+    image: getmeili/meilisearch:v1.29
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MEILI_ENV: production
+      MEILI_NO_ANALYTICS: true
+      MEILI_NO_USAGE_STATS: true
+      MEILI_NO_CRASH_REPORTS: true
+      MEILI_HTTP_ADDR: 0.0.0.0:9005
+    ports:
+      - "9005:9005"
+    volumes:
+      - meilisearch_data:/meili_data
+    networks:
+      - shared
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://127.0.0.1:9005/health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  meilisearch_data:
+
+networks:
+  shared:
+    external: true

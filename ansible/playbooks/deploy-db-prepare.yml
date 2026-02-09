@@ -1,0 +1,66 @@
+---
+- name: Deploy db-prepare (Run Migrations)
+  hosts: all
+  gather_facts: no
+
+  vars:
+    service_name: "db-prepare"
+    local_dist: "{{ playbook_dir }}/../../infra-apps/db-prepare/deploy-dist"
+    remote_dir: "/srv/db-prepare"
+    deploy_env: "{{ deploy_env | default('prod') }}"
+
+  tasks:
+    - debug:
+        msg: "🚀 Running database migrations"
+
+    - name: Ensure service directory exists
+      file:
+        path: "{{ remote_dir }}"
+        state: directory
+        owner: "{{ deploy_user | default('deploy') }}"
+        group: "{{ deploy_user | default('deploy') }}"
+        mode: '0755'
+
+    # ===== Sync files =====
+    - name: Sync deploy-dist to server
+      synchronize:
+        src: "{{ local_dist }}/"
+        dest: "{{ remote_dir }}/"
+        delete: yes
+        owner: no
+        group: no
+
+    # ===== Docker operations =====
+    - name: Login to ECR
+      shell: |
+        aws ecr get-login-password --region {{ ecr_region }} | \
+          docker login --username AWS --password-stdin {{ ecr_registry }}
+      environment:
+        AWS_DEFAULT_REGION: "{{ ecr_region }}"
+      changed_when: false
+      when: ecr_registry is defined
+
+    - name: Pull new images
+      shell: |
+        cd {{ remote_dir }}
+        docker compose pull --quiet
+      register: pull_result
+      changed_when: pull_result.stdout != ""
+
+    - name: Run migrations
+      shell: |
+        cd {{ remote_dir }}
+        docker compose run --rm -e DEPLOY_ENV={{ deploy_env }} db-prepare
+      register: migration_result
+
+    - debug:
+        msg: "{{ migration_result.stdout_lines }}"
+
+    - name: Check migration status
+      fail:
+        msg: "❌ Database migrations failed!"
+      when: migration_result.rc != 0
+
+    - name: Success message
+      debug:
+        msg: "✅ Database migrations completed successfully"

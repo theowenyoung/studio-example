@@ -1,0 +1,101 @@
+name: Server Init
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target server(s) to initialize"
+        required: true
+        type: choice
+        options:
+          - "all"
+          - "prod_servers"
+          - "prod1"
+          - "prod2"
+          - "preview"
+      force_system_update:
+        description: "Force system update (apt upgrade)"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  server-init:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 缓存 mise
+      - name: Cache mise
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/mise
+          key: mise-${{ runner.os }}-${{ hashFiles('.mise/config.toml') }}
+
+      # 安装 mise
+      - name: Install mise
+        run: |
+          curl https://mise.run | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      # 激活 mise 环境
+      - name: Setup mise
+        run: |
+          mise install
+
+      # 缓存 Ansible Galaxy 依赖
+      - name: Cache Ansible Galaxy dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ansible/roles
+            ~/.ansible/collections
+          key: ansible-galaxy-${{ hashFiles('ansible/requirements.yml') }}
+
+      # 安装 Ansible Galaxy 依赖
+      - name: Install Ansible Galaxy dependencies
+        run: |
+          ansible-galaxy install -r ansible/requirements.yml
+
+      # 配置 AWS（用于 Parameter Store）
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.CI_AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      # 从 Parameter Store 读取 SSH Key
+      - name: Load SSH key from Parameter Store
+        run: |
+          DEPLOY_SSH_KEY=$(aws ssm get-parameter --name "/studio-prod/DEPLOY_SSH_KEY" --with-decryption --query "Parameter.Value" --output text)
+
+          mkdir -p ~/.ssh
+          echo "${DEPLOY_SSH_KEY}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+          echo "✅ SSH key loaded"
+
+      # 初始化服务器
+      - name: Initialize server
+        run: |
+          ARGS="${{ inputs.target }} --become"
+
+          if [ "${{ inputs.force_system_update }}" != "true" ]; then
+            ARGS="$ARGS --no-update"
+          fi
+
+          mise run server-init $ARGS
+        env:
+          ANSIBLE_SSH_PRIVATE_KEY_FILE: ~/.ssh/id_rsa
+
+      # 结果
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Server Init Result 🖥️" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Target: \`${{ inputs.target }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Force system update: \`${{ inputs.force_system_update }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Triggered by: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY

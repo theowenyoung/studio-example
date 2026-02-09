@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_USER: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./initdb.d:/docker-entrypoint-initdb.d:ro
+      - ./config:/etc/postgresql:ro
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
+    networks:
+      - shared
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres_data:
+    # Docker 管理的 volume，数据存储在 /data/docker/volumes/ (因为 data-root=/data/docker)
+
+networks:
+  shared:
+    external: true

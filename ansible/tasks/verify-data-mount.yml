@@ -1,0 +1,68 @@
+---
+# =====================================
+# 验证 /data 目录可用
+# =====================================
+# 使用方式:
+#   - include_tasks: ../tasks/verify-data-mount.yml
+#
+# 根据 use_data_volume 变量决定验证方式:
+#   - true:  验证 /data 是挂载点
+#   - false: 验证 /data 目录存在
+
+- name: Check if /data is a mountpoint
+  command: mountpoint -q /data
+  register: data_mount_check
+  failed_when: false
+  changed_when: false
+
+- name: Verify /data is mounted (when use_data_volume=true)
+  fail:
+    msg: "/data is not mounted! Expected a mounted volume."
+  when:
+    - use_data_volume | default(true)
+    - data_mount_check.rc != 0
+
+- name: Verify /data directory exists (when use_data_volume=false)
+  stat:
+    path: /data
+  register: data_dir_stat
+  when: not (use_data_volume | default(true))
+
+- name: Fail if /data directory doesn't exist
+  fail:
+    msg: "/data directory does not exist!"
+  when:
+    - not (use_data_volume | default(true))
+    - not (data_dir_stat.stat.exists | default(false))
+
+- name: Verify /data is writable
+  file:
+    path: /data/.mount-test
+    state: touch
+    mode: '0644'
+  register: data_write_check
+  changed_when: false
+
+- name: Clean up test file
+  file:
+    path: /data/.mount-test
+    state: absent
+
+- name: Get /data mount info
+  shell: df -h /data | tail -1
+  register: data_df
+  changed_when: false
+
+- name: Show /data status (mounted volume)
+  debug:
+    msg:
+      - "✅ /data is properly mounted and writable"
+      - "{{ data_df.stdout }}"
+  when: use_data_volume | default(true)
+
+- name: Show /data status (directory on system disk)
+  debug:
+    msg:
+      - "✅ /data directory exists and is writable (no volume mounted)"
+      - "{{ data_df.stdout }}"
+  when: not (use_data_volume | default(true))

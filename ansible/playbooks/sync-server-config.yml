@@ -1,0 +1,66 @@
+---
+# Sync server configuration files
+# This playbook syncs server-mise.toml and bash_aliases to the server
+#
+# Usage:
+#   ansible-playbook -i inventory.yml playbooks/sync-server-config.yml
+#   or
+#   mise run server-sync-config
+
+- name: Sync Server Configuration Files
+  hosts: all
+  become: yes
+
+  vars:
+    mise_config_path: "/srv/mise.toml"
+
+  tasks:
+    - name: Ensure /srv directory exists
+      file:
+        path: /srv
+        state: directory
+        owner: deploy
+        group: deploy
+        mode: '0755'
+
+    - name: Copy server-mise.toml to server
+      copy:
+        src: ../../server-mise.toml
+        dest: "{{ mise_config_path }}"
+        owner: deploy
+        group: deploy
+        mode: '0644'
+      tags: [mise]
+      register: mise_config_updated
+
+    - name: Copy bash_aliases to server
+      copy:
+        src: ../files/bash_aliases
+        dest: /home/deploy/.bash_aliases
+        owner: deploy
+        group: deploy
+        mode: '0644'
+      tags: [aliases]
+      register: aliases_updated
+
+    - name: Trust mise config file
+      command: /home/deploy/.local/bin/mise trust
+      args:
+        chdir: /srv
+      become_user: deploy
+      tags: [mise]
+      register: mise_trust_result
+      failed_when: false
+      changed_when: mise_trust_result.rc == 0
+    - name: Display sync results
+      debug:
+        msg:
+          - "✅ Configuration files synced"
+          - ""
+          - "server-mise.toml: {{ 'Updated' if mise_config_updated.changed else 'No changes' }}"
+          - "bash_aliases: {{ 'Updated' if aliases_updated.changed else 'No changes' }}"
+          - "mise trust: {{ 'Executed' if mise_trust_result.changed else 'Already trusted' }}"
+          - ""
+          - "Changes will take effect:"
+          - "  - mise tasks: Immediately"
+          - "  - bash aliases: On next login or run 'source ~/.bashrc'"

@@ -1,0 +1,43 @@
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:1.123.5
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Non-sensitive config (keep in docker-compose, not .env)
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_PORT: 5432
+      N8N_PORT: 3000
+      N8N_PROTOCOL: https
+      GENERIC_TIMEZONE: Asia/Shanghai
+      NODE_ENV: production
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+    ports:
+      - "9007:3000"
+    networks:
+      - shared
+    volumes:
+      - n8n_data:/home/node/.n8n
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://127.0.0.1:3000/healthz",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  n8n_data:
+
+networks:
+  shared:
+    external: true

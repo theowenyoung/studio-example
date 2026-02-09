@@ -1,0 +1,99 @@
+---
+- name: Deploy Backup Service
+  hosts: prod_servers  # 备份只在生产环境
+  gather_facts: no
+
+  vars:
+    service_name: "backup"
+    local_dist: "{{ playbook_dir }}/../../infra-apps/backup/deploy-dist"
+    remote_dir: "/srv/backup"
+
+  tasks:
+    - debug:
+        msg: "🚀 Deploying Backup service"
+
+    - name: Verify /data mount
+      include_tasks: ../tasks/verify-data-mount.yml
+      tags: [always]
+
+    - name: Create /data/backups directory
+      become: yes
+      become_user: root
+      file:
+        path: /data/backups
+        state: directory
+        owner: "{{ deploy_user | default('deploy') }}"
+        group: "{{ deploy_user | default('deploy') }}"
+        mode: '0755'
+
+    - name: Ensure service directory exists
+      file:
+        path: "{{ remote_dir }}"
+        state: directory
+        owner: "{{ deploy_user | default('deploy') }}"
+        group: "{{ deploy_user | default('deploy') }}"
+        mode: '0755'
+
+    # ===== Sync files =====
+    - name: Sync deploy-dist to server
+      synchronize:
+        src: "{{ local_dist }}/"
+        dest: "{{ remote_dir }}/"
+        delete: yes
+        owner: no
+        group: no
+
+    # ===== Docker operations =====
+    - name: Login to ECR
+      shell: |
+        aws ecr get-login-password --region {{ ecr_region }} | \
+          docker login --username AWS --password-stdin {{ ecr_registry }}
+      environment:
+        AWS_DEFAULT_REGION: "{{ ecr_region }}"
+      changed_when: false
+      when: ecr_registry is defined
+
+    - name: Pull new images
+      shell: |
+        cd {{ remote_dir }}
+        docker compose pull --quiet
+      register: pull_result
+      changed_when: pull_result.stdout != ""
+
+    - name: Docker compose up
+      shell: |
+        cd {{ remote_dir }}
+        docker compose up -d --remove-orphans
+      register: deploy_result
+
+    - debug:
+        msg: "{{ deploy_result.stdout_lines }}"
+
+    - name: Check if service was restarted
+      set_fact:
+        service_restarted: "{{ 'Recreated' in deploy_result.stdout or 'Started' in deploy_result.stdout or 'Created' in deploy_result.stdout }}"
+
+    - name: Force restart if no changes detected
+      shell: |
+        cd {{ remote_dir }}
+        docker compose restart {{ service_name }}
+      when: not service_restarted
+      register: force_restart_result
+
+    - name: Display force restart message
+      debug:
+        msg: "🔄 No changes detected, forced restart of {{ service_name }}"
+      when: not service_restarted
+
+    # ===== Health check (backup service may not always be running) =====
+    - name: Check backup service status
+      shell: |
+        cd {{ remote_dir }}
+        docker compose ps backup --format json 2>/dev/null | jq -r '.State // empty' | head -1
+      register: container_state
+      failed_when: false
+      changed_when: false
+
+    - name: Display backup service status
+      debug:
+        msg: "✅ Successfully deployed Backup service (Status: {{ container_state.stdout | default('not running - this is normal for cron-based services') }})"

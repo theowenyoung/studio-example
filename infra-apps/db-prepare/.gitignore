@@ -1,0 +1,8 @@
+# Environment variables with sensitive information
+.env
+
+# Local data
+.local/
+
+# Local build output
+dist/

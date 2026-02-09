@@ -1,0 +1,109 @@
+---
+- name: Deploy Caddy Infrastructure
+  hosts: all  # 部署到所有服务器
+  gather_facts: no
+
+  vars:
+    service_name: "caddy"
+    local_dist: "{{ playbook_dir }}/../../infra-apps/caddy/deploy-dist"
+    remote_dir: "/srv/caddy"
+
+  tasks:
+    - debug:
+        msg: "🚀 Deploying Caddy"
+
+    - name: Ensure service directory exists
+      file:
+        path: "{{ remote_dir }}"
+        state: directory
+        owner: "{{ deploy_user | default('deploy') }}"
+        group: "{{ deploy_user | default('deploy') }}"
+        mode: '0755'
+
+    # ===== Sync files =====
+    # Note: exclude preview/ to preserve dynamically generated preview configs
+    - name: Sync deploy-dist to server
+      synchronize:
+        src: "{{ local_dist }}/"
+        dest: "{{ remote_dir }}/"
+        delete: yes
+        owner: no
+        group: no
+        rsync_opts:
+          - "--exclude=config/preview/*"
+
+    # ===== Docker operations =====
+    - name: Login to ECR
+      shell: |
+        aws ecr get-login-password --region {{ ecr_region }} | \
+          docker login --username AWS --password-stdin {{ ecr_registry }}
+      environment:
+        AWS_DEFAULT_REGION: "{{ ecr_region }}"
+      changed_when: false
+      when: ecr_registry is defined
+
+    - name: Pull new images
+      shell: |
+        cd {{ remote_dir }}
+        docker compose pull --quiet
+      register: pull_result
+      changed_when: pull_result.stdout != ""
+
+    - name: Docker compose up
+      shell: |
+        cd {{ remote_dir }}
+        docker compose up -d --remove-orphans
+      register: deploy_result
+
+    - debug:
+        msg: "{{ deploy_result.stdout_lines }}"
+
+    - name: Check if service was restarted
+      set_fact:
+        service_restarted: "{{ 'Recreated' in deploy_result.stdout or 'Started' in deploy_result.stdout or 'Created' in deploy_result.stdout }}"
+
+    - name: Reload Caddy config if no container restart
+      shell: |
+        cd {{ remote_dir }}
+        docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+      when: not service_restarted
+      register: reload_result
+      failed_when: false
+
+    - name: Display reload message
+      debug:
+        msg: "🔄 Container not restarted, reloaded Caddy config"
+      when: not service_restarted
+
+    # ===== Health check =====
+    - name: Wait for Caddy to be healthy
+      shell: |
+        cd {{ remote_dir }}
+        docker compose ps caddy --format json 2>/dev/null | jq -r '.State // empty' | head -1
+      register: container_state
+      until: container_state.stdout == "running" or container_state.stdout == "running (healthy)"
+      retries: 12
+      delay: 5
+      failed_when: false
+
+    - name: Get container logs if deployment failed
+      shell: |
+        cd {{ remote_dir }}
+        docker compose logs --tail=50 caddy
+      register: container_logs
+      when: container_state.stdout != "running" and container_state.stdout != "running (healthy)"
+
+    - name: Display container logs
+      debug:
+        msg: "{{ container_logs.stdout_lines }}"
+      when: container_logs is defined and container_logs.stdout_lines is defined
+
+    - name: Fail if deployment unsuccessful
+      fail:
+        msg: "❌ Deployment of Caddy failed! Check logs above."
+      when: container_state.stdout != "running" and container_state.stdout != "running (healthy)"
+
+    - name: Display success message
+      debug:
+        msg: "✅ Successfully deployed Caddy"
+      when: container_state.stdout == "running" or container_state.stdout == "running (healthy)"

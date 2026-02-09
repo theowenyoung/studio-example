@@ -1,0 +1,27 @@
+all:
+  children:
+    prod_servers:
+      hosts:
+        prod1:
+          ansible_host: YOUR_PROD_SERVER_IP
+          ansible_user: deploy
+          ansible_python_interpreter: /usr/bin/python3
+        # prod2:
+        #   ansible_host: YOUR_PROD2_SERVER_IP
+        #   ansible_user: deploy
+        #   ansible_python_interpreter: /usr/bin/python3
+      vars:
+        deploy_environment: prod
+
+    preview_servers:
+      hosts:
+        preview:
+          ansible_host: YOUR_PREVIEW_SERVER_IP
+          ansible_user: deploy
+          ansible_python_interpreter: /usr/bin/python3
+      vars:
+        deploy_environment: preview
+
+  vars:
+    # 共享配置（AWS、ECR 等）
+    ecr_registry: "YOUR_AWS_ACCOUNT_ID.dkr.ecr.us-west-2.amazonaws.com"

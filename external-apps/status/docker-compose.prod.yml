@@ -1,0 +1,32 @@
+name: ${DOCKER_SERVICE_NAME}
+
+services:
+  ${DOCKER_SERVICE_NAME}:
+    image: louislam/uptime-kuma:2
+    restart: unless-stopped
+    environment:
+      UPTIME_KUMA_PORT: 3000
+      UPTIME_KUMA_DB_TYPE: sqlite
+    volumes:
+      - sqlite_${DOCKER_SERVICE_NAME}_data:/app/data
+    networks:
+      - shared
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/api/status-page/heartbeat', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  sqlite_${DOCKER_SERVICE_NAME}_data:
+    # Docker 管理的 volume，数据存储在 /data/docker/volumes/
+
+networks:
+  shared:
+    external: true

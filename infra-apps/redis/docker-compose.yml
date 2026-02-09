@@ -1,0 +1,32 @@
+services:
+  redis:
+    image: redis:8.2-alpine
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./src/config:/usr/local/etc/redis:ro
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a ${COMMON_REDIS_PASSWORD} ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--requirepass", "${COMMON_REDIS_PASSWORD}"]
+    networks:
+      - shared
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  redis_data:
+
+networks:
+  shared:
+    external: true
